@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
+from typing import Any, Callable, Optional
 
 from phoenix_agent.config import PhoenixConfig
 from phoenix_agent.llm.provider import create_llm
@@ -75,13 +76,20 @@ class PhoenixAgent:
 
         logger.info("Phoenix Agent initialized")
 
-    def run(self, request: str, target_path: str) -> dict:
+    def run(
+        self,
+        request: str,
+        target_path: str,
+        on_phase: Optional[Callable[..., Any]] = None,
+    ) -> dict:
         """
         Main entry point. Runs the full refactoring loop.
 
         Args:
-            request: Developer's refactoring request (e.g., "Refactor UserService to follow SRP")
+            request: Developer's refactoring request
             target_path: Path to the project/directory to refactor
+            on_phase: Optional callback(event_type, phase, data, iteration)
+                      for streaming progress to a frontend.
 
         Returns:
             dict with status, session_id, and details
@@ -90,6 +98,7 @@ class PhoenixAgent:
         if not target.exists():
             return {"status": "failed", "reason": f"Target path not found: {target_path}"}
 
+        self._emit = on_phase or (lambda *a, **kw: None)
         start_time = time.time()
 
         # Create session
@@ -109,27 +118,33 @@ class PhoenixAgent:
             logger.info(f"\n{'='*60}")
             logger.info(f"ITERATION {iteration}/{max_iterations}")
             logger.info(f"{'='*60}")
+            self._emit("iteration_start", iteration=iteration, data={"max": max_iterations})
 
             try:
                 result = self._run_iteration(
                     session, iteration, request, str(target), start_time
                 )
                 if result is not None:
-                    # Iteration produced a final result
+                    self._emit("completed", data=result, iteration=iteration)
                     return result
             except Exception as e:
                 logger.error(f"Iteration {iteration} failed: {e}", exc_info=True)
+                self._emit("error", message=str(e), iteration=iteration)
                 session.retry_count += 1
                 if session.retry_count >= max_retries:
-                    return self.updater.finalize_failure(
+                    result = self.updater.finalize_failure(
                         session, f"Max retries exceeded: {e}", start_time
                     )
+                    self._emit("completed", data=result, iteration=iteration)
+                    return result
 
         # Timeout
         session.status = SessionStatus.TIMEOUT
-        return self.updater.finalize_failure(
+        result = self.updater.finalize_failure(
             session, f"Max iterations ({max_iterations}) reached", start_time
         )
+        self._emit("completed", data=result, iteration=iteration)
+        return result
 
     def _run_iteration(
         self,
@@ -141,9 +156,12 @@ class PhoenixAgent:
     ) -> dict | None:
         """Run one complete iteration of the 7-phase loop. Returns result dict or None to continue."""
 
+        emit = self._emit
+
         # ---- 1. OBSERVE ----
         session.current_phase = AgentPhase.OBSERVE
         observation = self.observer.observe(session.session_id, target_path)
+        emit("phase_update", phase="OBSERVE", data=observation, iteration=iteration)
         if not observation.complete:
             logger.warning("Observation incomplete - skipping iteration")
             return None
@@ -151,6 +169,7 @@ class PhoenixAgent:
         # ---- 2. REASON ----
         session.current_phase = AgentPhase.REASON
         analysis = self.reasoner.reason(observation, request)
+        emit("phase_update", phase="REASON", data=analysis, iteration=iteration)
         if not analysis.approach:
             logger.warning("Reasoning produced no approach - skipping iteration")
             return None
@@ -158,6 +177,7 @@ class PhoenixAgent:
         # ---- 3. PLAN ----
         session.current_phase = AgentPhase.PLAN
         plan = self.planner.plan(analysis, observation)
+        emit("phase_update", phase="PLAN", data=plan, iteration=iteration)
         if not plan.steps:
             logger.warning("Planning produced no steps - skipping iteration")
             return None
@@ -169,6 +189,7 @@ class PhoenixAgent:
             test_coverage = observation.existing_test_results.coverage.overall_percentage
 
         decision = self.arbiter.decide(plan, analysis, test_coverage)
+        emit("phase_update", phase="DECIDE", data=decision, iteration=iteration)
 
         if decision.requires_human:
             session.status = SessionStatus.AWAITING_APPROVAL
@@ -191,12 +212,12 @@ class PhoenixAgent:
         # ---- 5. ACT ----
         session.current_phase = AgentPhase.ACT
         step_results = self.executor.execute(plan, decision.tool_mapping, target_path)
+        emit("phase_update", phase="ACT", data=step_results, iteration=iteration)
 
         # Check for critical failures
         critical = [r for r in step_results if r.get("critical")]
         if critical:
             logger.error("Critical failure during execution")
-            # Rollback: git reset
             self.git_ops.execute(
                 operation="reset",
                 repository_path=target_path,
@@ -214,6 +235,7 @@ class PhoenixAgent:
             step_results, decision.validation_level,
             target_path, observation.file_metrics,
         )
+        emit("phase_update", phase="VERIFY", data=report, iteration=iteration)
 
         # ---- 7. UPDATE ----
         session.current_phase = AgentPhase.UPDATE
@@ -221,6 +243,7 @@ class PhoenixAgent:
             session, iteration, observation, analysis,
             plan, decision, step_results, report,
         )
+        emit("phase_update", phase="UPDATE", iteration=iteration)
 
         if report.tests_passed and report.improved:
             # Success!

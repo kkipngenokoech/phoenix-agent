@@ -1,0 +1,9 @@
+[project]
+name = "sample-project"
+version = "1.0.0"
+description = "Sample project with intentional code smells for Phoenix Agent demo"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

@@ -1,615 +1,278 @@
 """
-Phoenix RAG - Streamlit Web Interface
+Phoenix Agent - Streamlit Web Interface
 
-A web-based UI for the Phoenix code refactoring assistant.
 Run with: streamlit run app.py
 """
 
 import os
 import sys
+import json
+import time
 from pathlib import Path
 
-# Add src directory to Python path for Streamlit Cloud deployment
 src_path = Path(__file__).parent / "src"
 if src_path.exists() and str(src_path) not in sys.path:
     sys.path.insert(0, str(src_path))
 
 import streamlit as st
-import json
-import time
 
-# Page config must be first Streamlit command
 st.set_page_config(
-    page_title="Phoenix RAG",
-    page_icon="P",
+    page_title="Phoenix Agent",
+    page_icon="🔥",
     layout="wide",
-    initial_sidebar_state="expanded",
 )
 
-# Custom CSS for modern styling
+# Custom CSS
 st.markdown("""
 <style>
-    /* Main container styling */
-    .main .block-container {
-        padding-top: 2rem;
-        padding-bottom: 2rem;
-    }
-
-    /* Header styling */
-    .main-header {
-        font-size: 2.5rem;
-        font-weight: 700;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        margin-bottom: 0.5rem;
-    }
-
-    .sub-header {
-        color: #6b7280;
-        font-size: 1.1rem;
-        margin-bottom: 2rem;
-    }
-
-    /* Card styling */
-    .metric-card {
-        background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%);
-        border-radius: 12px;
-        padding: 1.5rem;
-        margin: 0.5rem 0;
-        border-left: 4px solid #667eea;
-    }
-
-    .metric-card h3 {
-        margin: 0 0 0.5rem 0;
-        color: #374151;
-        font-size: 0.9rem;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-    }
-
-    .metric-card .value {
-        font-size: 2rem;
-        font-weight: 700;
-        color: #667eea;
-    }
-
-    /* Code smell card */
-    .smell-card {
-        background: #fff;
-        border-radius: 8px;
-        padding: 1rem;
-        margin: 0.5rem 0;
-        border: 1px solid #e5e7eb;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-    }
-
-    .smell-card.high {
-        border-left: 4px solid #ef4444;
-    }
-
-    .smell-card.medium {
-        border-left: 4px solid #f59e0b;
-    }
-
-    .smell-card.low {
-        border-left: 4px solid #10b981;
-    }
-
-    /* Trace step styling */
-    .trace-step {
-        background: #f9fafb;
-        border-radius: 8px;
-        padding: 1rem;
-        margin: 0.5rem 0;
-        border-left: 3px solid #667eea;
-    }
-
-    .trace-action {
-        display: inline-block;
-        padding: 0.25rem 0.75rem;
-        border-radius: 9999px;
-        font-size: 0.75rem;
-        font-weight: 600;
-        text-transform: uppercase;
-    }
-
-    .trace-action.retrieve {
-        background: #dbeafe;
-        color: #1d4ed8;
-    }
-
-    .trace-action.analyze {
-        background: #fef3c7;
-        color: #92400e;
-    }
-
-    .trace-action.respond {
-        background: #d1fae5;
-        color: #065f46;
-    }
-
-    /* Tab styling */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-    }
-
-    .stTabs [data-baseweb="tab"] {
-        padding: 10px 24px;
-        border-radius: 8px 8px 0 0;
-    }
-
-    /* Button styling */
-    .stButton > button {
-        border-radius: 8px;
-        font-weight: 500;
-        transition: all 0.2s;
-    }
-
-    .stButton > button:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-    }
-
-    /* Sidebar styling */
-    .css-1d391kg {
-        background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
-    }
-
-    /* Input styling */
-    .stTextArea textarea {
-        border-radius: 8px;
-        border: 2px solid #e5e7eb;
-    }
-
-    .stTextArea textarea:focus {
-        border-color: #667eea;
-        box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
-    }
+.main-header {
+    background: linear-gradient(90deg, #ff6b35 0%, #f7c948 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    font-size: 2.5rem;
+    font-weight: 700;
+}
+.phase-badge {
+    display: inline-block;
+    padding: 2px 12px;
+    border-radius: 12px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    margin: 2px;
+}
+.phase-observe { background: #e3f2fd; color: #1565c0; }
+.phase-reason { background: #f3e5f5; color: #7b1fa2; }
+.phase-plan { background: #e8f5e9; color: #2e7d32; }
+.phase-decide { background: #fff3e0; color: #e65100; }
+.phase-act { background: #fce4ec; color: #c62828; }
+.phase-verify { background: #e0f7fa; color: #00695c; }
+.phase-update { background: #f1f8e9; color: #33691e; }
+.metric-card {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 16px;
+    margin: 4px 0;
+    border-left: 4px solid #ff6b35;
+}
 </style>
 """, unsafe_allow_html=True)
 
 
-def load_secrets():
-    """Load secrets from Streamlit Cloud or environment."""
-    if hasattr(st, "secrets") and len(st.secrets) > 0:
-        for key in ["LLM_PROVIDER", "LLM_MODEL", "GROQ_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"]:
-            if key in st.secrets:
-                os.environ[key] = st.secrets[key]
+def init_session():
+    if "agent" not in st.session_state:
+        st.session_state.agent = None
+    if "result" not in st.session_state:
+        st.session_state.result = None
+    if "running" not in st.session_state:
+        st.session_state.running = False
 
 
-@st.cache_resource
-def initialize_agent():
-    """Initialize the Phoenix agent (cached to avoid reloading)."""
-    load_secrets()
+def load_agent():
+    from phoenix_agent.agent import PhoenixAgent
+    from phoenix_agent.config import PhoenixConfig
 
-    from phoenix_rag.agent import PhoenixAgent
-    from phoenix_rag.config import PhoenixConfig
-
-    config = PhoenixConfig()
-    config.ensure_directories()
-
-    agent = PhoenixAgent(config)
-    return agent
+    config = PhoenixConfig.from_env()
+    st.session_state.agent = PhoenixAgent(config)
+    return st.session_state.agent
 
 
-@st.cache_resource
-def load_knowledge_base(_agent):
-    """Load documents into the knowledge base."""
-    docs_dir = Path("data/documents")
+def run_analysis_only(target_path):
+    """Run just the AST analysis without the full agent loop."""
+    from phoenix_agent.tools.ast_parser import ASTParserTool
+    from phoenix_agent.tools.test_runner import TestRunnerTool
 
-    if not docs_dir.exists():
-        return 0, "No documents directory found"
+    parser = ASTParserTool()
+    runner = TestRunnerTool()
 
-    total_chunks = 0
-    sources = []
+    # Find Python files
+    py_files = sorted(str(p) for p in Path(target_path).rglob("*.py")
+                      if "__pycache__" not in str(p) and "test_" not in p.name and "/tests/" not in str(p))
 
-    doc_types = {
-        "refactoring_patterns": "refactoring_pattern",
-        "code_smells": "code_smell",
-        "best_practices": "best_practice",
-        "style_guides": "style_guide",
-    }
+    ast_result = parser.execute(file_paths=py_files)
+    test_result = runner.execute(project_path=target_path, coverage_required=False)
 
-    for folder, doc_type in doc_types.items():
-        folder_path = docs_dir / folder
-        if folder_path.exists():
-            chunks = _agent.retrieval.ingest_from_directory(
-                folder_path,
-                doc_type=doc_type,
-            )
-            total_chunks += chunks
-            sources.append(f"{folder}: {chunks} chunks")
-
-    return total_chunks, sources
+    return ast_result, test_result
 
 
-def display_trace(trace):
-    """Display agent execution trace."""
-    if not trace:
+def display_ast_results(result):
+    if not result.success:
+        st.error(f"Analysis failed: {result.error}")
         return
 
-    with st.expander("View Agent Reasoning Trace", expanded=False):
-        if trace.steps:
-            for step in trace.steps:
-                action_value = step.action.value if step.action else "UNKNOWN"
-                tool_info = f" | Tool: {step.tool_used}" if step.tool_used else ""
+    for pf in result.output.get("parsed_files", []):
+        fname = pf["file_path"].split("/")[-1]
+        m = pf["metrics"]
+        smells = pf.get("code_smells", [])
 
-                st.markdown(f"**Step {step.step_number}** - `{action_value}`{tool_info}")
+        with st.expander(f"📄 {fname} — complexity: {m['cyclomatic_complexity']}, smells: {len(smells)}", expanded=True):
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Lines of Code", m["lines_of_code"])
+            col2.metric("Cyclomatic Complexity", m["cyclomatic_complexity"])
+            col3.metric("Functions", m["function_count"])
+            col4.metric("Max Nesting", m["max_nesting_depth"])
 
-                thought_text = step.thought[:300] if step.thought else "No thought recorded"
-                if step.thought and len(step.thought) > 300:
-                    thought_text += "..."
-                st.caption(thought_text)
-                st.divider()
-        else:
-            st.info("No reasoning steps recorded.")
-
-        col1, col2 = st.columns(2)
-        with col1:
-            score = trace.groundedness_score if trace.groundedness_score is not None else 0.0
-            st.metric("Groundedness Score", f"{score:.0%}")
-        with col2:
-            st.metric("Iterations", trace.total_iterations or 0)
+            if smells:
+                st.markdown("**Code Smells:**")
+                for smell in smells:
+                    severity = smell.get("severity", "low")
+                    icon = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(severity, "⚪")
+                    loc = smell.get("location", {})
+                    line = loc.get("start_line", "?")
+                    st.markdown(f"- {icon} **{smell['type']}** (line {line}): {smell.get('description', '')}")
 
 
-def display_code_smells(smells):
-    """Display code smells in a formatted way."""
-    if not smells:
-        st.info("No code smells detected.")
+def display_test_results(result):
+    if not result.success:
+        st.error(f"Tests failed: {result.error}")
         return
 
-    for smell in smells:
-        severity = smell.get("severity", "medium").lower()
-        st.markdown(f"""
-        <div class="smell-card {severity}">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <strong>{smell.get('name', 'Unknown Smell')}</strong>
-                <span style="font-size: 0.75rem; color: #6b7280; text-transform: uppercase;">{severity}</span>
-            </div>
-            <p style="color: #4b5563; margin: 0.5rem 0 0 0; font-size: 0.9rem;">
-                {smell.get('description', '')}
-            </p>
-            {f'<p style="color: #667eea; margin: 0.5rem 0 0 0; font-size: 0.85rem;"><strong>Location:</strong> {smell.get("location", "")}</p>' if smell.get("location") else ''}
-        </div>
-        """, unsafe_allow_html=True)
-
-
-def display_metrics(metrics):
-    """Display complexity metrics in a clean format."""
-    # Extract values from nested structure
-    cc_data = metrics.get('cyclomatic_complexity', {})
-    mi_data = metrics.get('maintainability_index', {})
-    raw_data = metrics.get('raw_metrics', {})
-
-    # Summary
-    if metrics.get('summary'):
-        st.info(metrics['summary'])
-
-    # Main metrics in columns
+    summary = result.output.get("summary", {})
     col1, col2, col3, col4 = st.columns(4)
-
-    with col1:
-        cc_value = cc_data.get('average_complexity', 'N/A') if isinstance(cc_data, dict) else 'N/A'
-        cc_rank = cc_data.get('overall_rank', '') if isinstance(cc_data, dict) else ''
-        st.metric("Cyclomatic Complexity", f"{cc_value}", help=cc_rank)
-
-    with col2:
-        mi_value = mi_data.get('score', 'N/A') if isinstance(mi_data, dict) else 'N/A'
-        mi_rating = mi_data.get('rating', '') if isinstance(mi_data, dict) else ''
-        st.metric("Maintainability Index", f"{mi_value}", help=mi_rating)
-
-    with col3:
-        loc = raw_data.get('loc', 'N/A') if isinstance(raw_data, dict) else 'N/A'
-        st.metric("Lines of Code", loc)
-
-    with col4:
-        sloc = raw_data.get('sloc', 'N/A') if isinstance(raw_data, dict) else 'N/A'
-        st.metric("Source Lines", sloc)
-
-    # Recommendations
-    if metrics.get('recommendations'):
-        st.subheader("Recommendations")
-        for rec in metrics['recommendations']:
-            st.warning(rec)
-
-    # Function-level complexity breakdown
-    if isinstance(cc_data, dict) and cc_data.get('blocks'):
-        st.subheader("Function Complexity Breakdown")
-        for block in cc_data['blocks']:
-            col1, col2, col3 = st.columns([3, 1, 1])
-            with col1:
-                st.text(f"{block.get('name', 'unknown')}")
-            with col2:
-                st.text(f"CC: {block.get('complexity', '?')}")
-            with col3:
-                st.text(f"Rank: {block.get('rank', '?')}")
+    col1.metric("Total", summary.get("total", 0))
+    col2.metric("Passed", summary.get("passed", 0))
+    col3.metric("Failed", summary.get("failed", 0))
+    col4.metric("Duration", f"{summary.get('duration_seconds', 0):.2f}s")
 
 
-def main():
-    # Header
-    st.markdown('<h1 class="main-header">Phoenix RAG</h1>', unsafe_allow_html=True)
-    st.markdown('<p class="sub-header">AI-powered code refactoring assistant</p>', unsafe_allow_html=True)
+def display_agent_result(result):
+    status = result.get("status", "unknown")
 
-    # Sidebar
-    with st.sidebar:
-        st.header("Settings")
+    if status == "success":
+        st.success("Refactoring completed successfully!")
 
-        # Initialize agent
-        with st.spinner("Loading Phoenix agent..."):
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Session", result.get("session_id", ""))
+        col2.metric("Duration", f"{result.get('duration_seconds', 0):.1f}s")
+        col3.metric("Branch", result.get("branch", "N/A"))
+
+        if result.get("pr_url"):
+            st.markdown(f"**Pull Request:** [{result['pr_url']}]({result['pr_url']})")
+
+        # Metrics comparison
+        before = result.get("metrics_before", {})
+        after = result.get("metrics_after", {})
+        if before or after:
+            st.markdown("### Complexity Changes")
+            cols = st.columns(len(before) or 1)
+            for i, f in enumerate(sorted(set(before.keys()) | set(after.keys()))):
+                b = before.get(f, 0)
+                a = after.get(f, 0)
+                delta = a - b
+                cols[i % len(cols)].metric(
+                    f.split("/")[-1],
+                    a,
+                    delta=delta,
+                    delta_color="inverse",
+                )
+
+    elif status == "awaiting_approval":
+        st.warning("Awaiting human approval")
+        st.json(result)
+
+    else:
+        st.error(f"Refactoring failed: {result.get('reason', 'Unknown')}")
+        st.json(result)
+
+
+# ---- Main App ----
+
+init_session()
+
+st.markdown('<p class="main-header">Phoenix Agent</p>', unsafe_allow_html=True)
+st.markdown("*Agentic code refactoring: Observe → Reason → Plan → Decide → Act → Verify → Update*")
+
+# Sidebar
+with st.sidebar:
+    st.header("Configuration")
+
+    if st.button("Initialize Agent", use_container_width=True):
+        with st.spinner("Loading agent..."):
             try:
-                agent = initialize_agent()
-                st.success("Agent loaded successfully")
+                agent = load_agent()
+                st.success(f"Agent ready ({agent.config.llm.provider})")
             except Exception as e:
-                st.error(f"Failed to load agent: {e}")
-                st.stop()
+                st.error(f"Failed: {e}")
 
-        # Load knowledge base
-        if st.button("Load Knowledge Base", use_container_width=True):
-            with st.spinner("Ingesting documents..."):
-                total, sources = load_knowledge_base(agent)
-                if total > 0:
-                    st.success(f"Loaded {total} chunks")
-                    for s in sources:
-                        st.caption(s)
-                else:
-                    st.warning("No documents loaded")
+    st.divider()
+    st.markdown("**Infrastructure**")
+    st.markdown("```\ndocker-compose up -d\n```")
+    st.markdown("Starts Redis, PostgreSQL, Neo4j")
 
-        st.divider()
+    st.divider()
+    st.markdown("**About**")
+    st.markdown(
+        "Phoenix Agent is a deep agentic system that "
+        "analyzes, refactors, tests, and creates PRs "
+        "for code improvements."
+    )
 
-        # Info
-        st.header("About")
-        st.markdown("""
-        **Phoenix RAG** helps you:
-        - Identify code smells
-        - Suggest refactoring patterns
-        - Apply best practices
-        - Analyze code complexity
-        - Generate test stubs
-        """)
+# Main tabs
+tab1, tab2, tab3 = st.tabs(["🔄 Refactor", "🔍 Analyze", "📊 History"])
 
-        st.divider()
+with tab1:
+    st.subheader("Run Refactoring Agent")
 
-        # Model info
-        st.caption(f"LLM: {agent.config.llm.model}")
-        st.caption(f"Embeddings: {agent.config.embedding.model_name}")
+    target = st.text_input("Target Project Path", value="./sample_project")
+    request = st.text_area(
+        "Refactoring Request",
+        value="Refactor UserService to follow the Single Responsibility Principle. "
+              "Extract authentication, validation, persistence, and notification into separate classes.",
+        height=100,
+    )
 
-    # Main content area with 4 tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["Chat", "Code Analysis", "Generate Tests", "Quick Tools"])
+    if st.button("Start Refactoring", type="primary", disabled=st.session_state.running):
+        if not st.session_state.agent:
+            st.warning("Initialize the agent first (sidebar)")
+        else:
+            st.session_state.running = True
+            with st.spinner("Running agent loop... (this may take a few minutes)"):
+                try:
+                    result = st.session_state.agent.run(request, target)
+                    st.session_state.result = result
+                    display_agent_result(result)
+                except Exception as e:
+                    st.error(f"Agent error: {e}")
+                finally:
+                    st.session_state.running = False
 
-    # Chat tab
-    with tab1:
-        # Initialize chat history
-        if "messages" not in st.session_state:
-            st.session_state.messages = []
-        if "traces" not in st.session_state:
-            st.session_state.traces = []
+    if st.session_state.result:
+        with st.expander("Full Result JSON"):
+            st.json(st.session_state.result)
 
-        # Display chat history
-        for i, message in enumerate(st.session_state.messages):
-            with st.chat_message(message["role"]):
-                st.markdown(message["content"])
-                if message["role"] == "assistant" and i < len(st.session_state.traces):
-                    trace = st.session_state.traces[i // 2]
-                    if trace:
-                        display_trace(trace)
+with tab2:
+    st.subheader("Code Analysis")
+    analysis_target = st.text_input("Project Path", value="./sample_project", key="analysis_target")
 
-        # Chat input
-        if prompt := st.chat_input("Ask about refactoring patterns, code smells, or best practices..."):
-            st.session_state.messages.append({"role": "user", "content": prompt})
-            with st.chat_message("user"):
-                st.markdown(prompt)
+    if st.button("Run Analysis"):
+        with st.spinner("Analyzing..."):
+            ast_result, test_result = run_analysis_only(analysis_target)
 
-            with st.chat_message("assistant"):
-                with st.spinner("Thinking..."):
-                    try:
-                        response, trace = agent.run(prompt)
+        st.markdown("### AST Analysis")
+        display_ast_results(ast_result)
 
-                        # Ensure response is displayed
-                        if response and isinstance(response, str):
-                            st.markdown(response)
-                        else:
-                            st.warning("No response generated. Check the trace below for details.")
+        st.markdown("### Test Results")
+        display_test_results(test_result)
 
-                        # Display trace if available
-                        if trace and trace.steps:
-                            display_trace(trace)
+with tab3:
+    st.subheader("Refactoring History")
 
-                        st.session_state.messages.append({"role": "assistant", "content": response or "No response"})
-                        st.session_state.traces.append(trace)
-                    except Exception as e:
-                        st.error(f"Error: {e}")
-                        import traceback
-                        st.code(traceback.format_exc())
+    if st.button("Load History"):
+        try:
+            from phoenix_agent.memory.history import RefactoringHistory
+            from phoenix_agent.config import PhoenixConfig
 
-        # Clear chat button
-        if st.button("Clear Chat"):
-            st.session_state.messages = []
-            st.session_state.traces = []
-            st.rerun()
+            config = PhoenixConfig.from_env()
+            history = RefactoringHistory(config)
+            records = history.get_history(limit=20)
 
-    # Code Analysis tab
-    with tab2:
-        st.subheader("Analyze Your Code")
-
-        code_input = st.text_area(
-            "Paste your code here:",
-            height=300,
-            placeholder="""# Paste your Python code here
-class Example:
-    def method_with_issues(self, a, b, c, d, e, f):
-        # Long method with many parameters...
-        pass
-""",
-            key="analysis_code"
-        )
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            analysis_type = st.selectbox(
-                "Analysis Type",
-                ["Full Analysis", "Code Smells Only", "Complexity Only", "Structure Only"],
-            )
-
-        with col2:
-            include_suggestions = st.checkbox("Include refactoring suggestions", value=True)
-
-        if st.button("Analyze Code", type="primary", use_container_width=True):
-            if not code_input.strip():
-                st.warning("Please enter some code to analyze.")
+            if not records:
+                st.info("No refactoring history found.")
             else:
-                with st.spinner("Analyzing code..."):
-                    try:
-                        if include_suggestions:
-                            query = "Analyze this code and suggest specific refactoring improvements based on best practices."
-                        else:
-                            query = "Analyze this code for structure, complexity, and code smells."
+                for r in records:
+                    status_icon = "✅" if r.outcome == "success" else "❌"
+                    with st.expander(f"{status_icon} {r.session_id} — {r.outcome} ({r.duration_seconds:.1f}s)"):
+                        st.json(r.model_dump())
 
-                        response, trace = agent.run(query, code=code_input)
-
-                        st.subheader("Analysis Results")
-                        st.markdown(response)
-
-                        display_trace(trace)
-
-                    except Exception as e:
-                        st.error(f"Analysis failed: {e}")
-
-    # Generate Tests tab
-    with tab3:
-        st.subheader("Generate Test Stubs")
-        st.markdown("Generate pytest test stubs for your Python code with comprehensive coverage.")
-
-        test_code_input = st.text_area(
-            "Paste your code here:",
-            height=300,
-            placeholder="""# Paste the Python code you want to generate tests for
-def calculate_total(items, tax_rate=0.1):
-    \"\"\"Calculate total price with tax.\"\"\"
-    subtotal = sum(item['price'] * item['quantity'] for item in items)
-    return subtotal * (1 + tax_rate)
-""",
-            key="test_code"
-        )
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            test_style = st.selectbox(
-                "Test Style",
-                ["unit", "integration", "both"],
-                format_func=lambda x: x.title()
-            )
-
-        with col2:
-            include_edge_cases = st.checkbox("Include edge case tests", value=True)
-
-        if st.button("Generate Tests", type="primary", use_container_width=True):
-            if not test_code_input.strip():
-                st.warning("Please enter some code to generate tests for.")
-            else:
-                with st.spinner("Generating test stubs..."):
-                    try:
-                        result = agent.tools.execute(
-                            "test_suggester",
-                            code=test_code_input,
-                            test_style=test_style,
-                            include_edge_cases=include_edge_cases,
-                        )
-
-                        if result.success:
-                            st.subheader("Generated Tests")
-                            st.code(result.output, language="python")
-
-                            if result.metadata:
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    st.metric("Functions Found", result.metadata.get("functions_found", 0))
-                                with col2:
-                                    st.metric("Tests Generated", result.metadata.get("tests_generated", 0))
-                        else:
-                            st.error(f"Failed to generate tests: {result.error}")
-
-                    except Exception as e:
-                        st.error(f"Test generation failed: {e}")
-
-    # Quick Tools tab
-    with tab4:
-        st.subheader("Quick Analysis Tools")
-        st.markdown("Run individual analysis tools directly without the full agent reasoning loop.")
-
-        quick_code_input = st.text_area(
-            "Paste your code here:",
-            height=250,
-            placeholder="""# Paste your Python code here for quick analysis
-def example_function():
-    pass
-""",
-            key="quick_code"
-        )
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            if st.button("Detect Code Smells", use_container_width=True):
-                if quick_code_input.strip():
-                    with st.spinner("Detecting code smells..."):
-                        result = agent.tools.execute(
-                            "code_analyzer",
-                            code=quick_code_input,
-                            analysis_type="smells",
-                        )
-                        if result.success:
-                            if isinstance(result.output, dict) and "code_smells" in result.output:
-                                display_code_smells(result.output["code_smells"])
-                            else:
-                                st.json(result.output)
-                        else:
-                            st.error(result.error)
-                else:
-                    st.warning("Please enter code first.")
-
-        with col2:
-            if st.button("Calculate Complexity", use_container_width=True):
-                if quick_code_input.strip():
-                    with st.spinner("Calculating metrics..."):
-                        result = agent.tools.execute(
-                            "complexity_calculator",
-                            code=quick_code_input,
-                            metrics=["all"],
-                        )
-                        if result.success:
-                            if isinstance(result.output, dict):
-                                display_metrics(result.output)
-                                st.divider()
-                                st.subheader("Detailed Metrics")
-                                st.json(result.output)
-                            else:
-                                st.json(result.output)
-                        else:
-                            st.error(result.error)
-                else:
-                    st.warning("Please enter code first.")
-
-        st.divider()
-
-        # Structure analysis
-        if st.button("Analyze Structure", use_container_width=True):
-            if quick_code_input.strip():
-                with st.spinner("Analyzing structure..."):
-                    result = agent.tools.execute(
-                        "code_analyzer",
-                        code=quick_code_input,
-                        analysis_type="structure",
-                    )
-                    if result.success:
-                        st.json(result.output)
-                    else:
-                        st.error(result.error)
-            else:
-                st.warning("Please enter code first.")
-
-
-if __name__ == "__main__":
-    main()
+            history.close()
+        except Exception as e:
+            st.error(f"Failed to load history: {e}")

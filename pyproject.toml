@@ -3,11 +3,11 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "phoenix-rag"
-version = "0.1.0"
-description = "RAG-enabled agent for code refactoring assistance"
+name = "phoenix-agent"
+version = "0.2.0"
+description = "Agentic code refactoring system with full observe-reason-plan-decide-act-verify-update loop"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [
     {name = "Phoenix Team"}
@@ -17,29 +17,35 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Software Development :: Quality Assurance",
 ]
 dependencies = [
+    # LLM
     "langchain>=0.1.0",
-    "langchain-ollama>=0.1.0",
+    "langchain-anthropic>=0.1.0",
     "langchain-community>=0.0.20",
-    "langchain-chroma>=0.1.0",
-    "chromadb>=0.4.22",
-    "sentence-transformers>=2.3.0",
-    "tiktoken>=0.5.0",
     "pydantic>=2.0.0",
     "python-dotenv>=1.0.0",
-    "rich>=13.0.0",
+    # Memory
+    "redis>=5.0.0",
+    "psycopg2-binary>=2.9",
+    "neo4j>=5.0.0",
+    # Tools
     "gitpython>=3.1.0",
     "radon>=6.0.0",
+    "pytest>=7.0.0",
+    "pytest-json-report>=1.5.0",
+    "pytest-cov>=4.0.0",
+    # UI & CLI
+    "rich>=13.0.0",
     "streamlit>=1.30.0",
 ]
 
 [project.urls]
-Homepage = "https://github.com/kkipngenokoech/phoenix-rag"
-Repository = "https://github.com/kkipngenokoech/phoenix-rag"
+Homepage = "https://github.com/kkipngenokoech/phoenix-agent"
+Repository = "https://github.com/kkipngenokoech/phoenix-agent"
 
 [project.optional-dependencies]
 dev = [
@@ -49,29 +55,38 @@ dev = [
     "ruff>=0.1.0",
     "mypy>=1.0.0",
 ]
-anthropic = [
-    "langchain-anthropic>=0.1.0",
-    "anthropic>=0.18.0",
+ollama = [
+    "langchain-ollama>=0.1.0",
 ]
 groq = [
     "langchain-groq>=0.1.0",
 ]
+openai = [
+    "langchain-openai>=0.1.0",
+]
+rag = [
+    "langchain-chroma>=0.1.0",
+    "chromadb>=0.4.22",
+    "sentence-transformers>=2.3.0",
+    "tiktoken>=0.5.0",
+]
 
 [project.scripts]
-phoenix = "phoenix_rag.cli:main"
+phoenix-agent = "phoenix_agent.cli:main"
+phoenix-rag = "phoenix_rag.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.black]
 line-length = 88
-target-version = ['py310']
+target-version = ['py311']
 
 [tool.ruff]
 line-length = 88
 select = ["E", "F", "I", "N", "W"]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true

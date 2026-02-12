@@ -67,7 +67,7 @@ class PhoenixAgent:
         self.reasoner = Reasoner(self.llm)
         self.planner = Planner(self.llm)
         self.arbiter = Arbiter(self.config)
-        self.executor = Executor(self.config, self.tool_registry)
+        self.executor = Executor(self.config, self.tool_registry, self.llm)
         self.verifier = Verifier(self.ast_parser, self.test_runner)
         self.updater = Updater(
             self.session_memory, self.history, self.graph,
@@ -211,8 +211,9 @@ class PhoenixAgent:
 
         # ---- 5. ACT ----
         session.current_phase = AgentPhase.ACT
+        emit("phase_update", phase="ACT", data={"status": "executing", "total_steps": len(plan.steps)}, iteration=iteration)
         step_results = self.executor.execute(plan, decision.tool_mapping, target_path)
-        emit("phase_update", phase="ACT", data=step_results, iteration=iteration)
+        emit("phase_update", phase="ACT_RESULT", data=step_results, iteration=iteration)
 
         # Check for critical failures
         critical = [r for r in step_results if r.get("critical")]

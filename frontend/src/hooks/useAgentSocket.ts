@@ -21,20 +21,29 @@ export function useAgentSocket(sessionId: string | null) {
   const [iteration, setIteration] = useState(0);
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const statusRef = useRef<ConnectionStatus>("disconnected");
 
   const connect = useCallback(() => {
     if (!sessionId) return;
 
     setStatus("connecting");
+    statusRef.current = "connecting";
     const ws = new WebSocket(getWsUrl(sessionId));
     wsRef.current = ws;
 
-    ws.onopen = () => setStatus("connected");
+    ws.onopen = () => {
+      setStatus("connected");
+      statusRef.current = "connected";
+    };
 
     ws.onmessage = (msg) => {
       try {
-        const event: PhaseEvent = JSON.parse(msg.data);
-        setEvents((prev) => [...prev, event]);
+        const event = JSON.parse(msg.data);
+
+        // Ignore server heartbeats (keepalive pings)
+        if (event.type === "heartbeat") return;
+
+        setEvents((prev) => [...prev, event as PhaseEvent]);
 
         if (event.type === "iteration_start") {
           setIteration(event.iteration);
@@ -43,6 +52,7 @@ export function useAgentSocket(sessionId: string | null) {
         } else if (event.type === "completed") {
           setResult(event.data);
           setStatus("done");
+          statusRef.current = "done";
         } else if (event.type === "error") {
           // Keep listening — errors don't always mean the session is over
         }
@@ -52,10 +62,16 @@ export function useAgentSocket(sessionId: string | null) {
     };
 
     ws.onclose = () => {
-      if (status !== "done") setStatus("disconnected");
+      if (statusRef.current !== "done") {
+        setStatus("disconnected");
+        statusRef.current = "disconnected";
+      }
     };
 
-    ws.onerror = () => setStatus("disconnected");
+    ws.onerror = () => {
+      setStatus("disconnected");
+      statusRef.current = "disconnected";
+    };
   }, [sessionId]);
 
   useEffect(() => {

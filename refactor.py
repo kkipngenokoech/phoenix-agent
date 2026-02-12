@@ -39,13 +39,42 @@ def print_subsection(title: str):
     print(f"\n--- {title} ---\n")
 
 
+class RetrievalModule:
+    def __init__(self):
+        pass
+
+    def ingest_from_directory(self, directory, doc_type):
+        raise NotImplementedError("Must be implemented by subclass")
+
+    def get_collection_stats(self):
+        return {"total_documents": 0}
+
+
+class CodeAnalyzerTool:
+    def execute(self, code, analysis_type="full"):
+        raise NotImplementedError("Must be implemented by subclass")
+
+
+class VerificationModule:
+    def __init__(self):
+        pass
+
+    def groundedness_score(self, trace):
+        raise NotImplementedError("Must be implemented by subclass")
+
+
+def print_subsection(title: str):
+    """Print a formatted subsection header."""
+    print(f"\n--- {title} ---\n")
+
+
 def run_demo():
     
     """Run the full Phoenix RAG demonstration."""
     from phoenix_rag.agent import PhoenixAgent
-    from phoenix_rag.retrieval import RetrievalModule
-    from phoenix_rag.tools import CodeAnalyzerTool
-    from phoenix_rag.verification import VerificationModule
+    from phoenix_rag.retrieval import RetrievalModule as BaseRetrievalModule
+    from phoenix_rag.tools import CodeAnalyzerTool as BaseCodeAnalyzerTool
+    from phoenix_rag.verification import VerificationModule as BaseVerificationModule
 
     # Create logs directory
     Path("logs").mkdir(exist_ok=True)
@@ -60,7 +89,7 @@ def run_demo():
     print_section("STEP 1: COMPONENT INITIALIZATION")
 
     logger.info("Initializing RetrievalModule with ChromaDB...")
-    retrieval = RetrievalModule()
+    retrieval = BaseRetrievalModule()
     logger.info("RetrievalModule initialized")
 
     logger.info("Initializing PhoenixAgent with ReAct loop...")
@@ -154,86 +183,21 @@ class DataProcessor:
         for i in range(len(data)):
             item = data[i]
             # Process each item
-            if item.get("type") == "A":
-                if item.get("status") == "active":
-                    if item.get("value") > 100:
-                        processed = item["value"] * 1.1
-                        results.append({"id": item["id"], "processed": processed})
-                    else:
-                        processed = item["value"] * 1.05
-                        results.append({"id": item["id"], "processed": processed})
-                else:
-                    results.append({"id": item["id"], "processed": 0})
-            elif item.get("type") == "B":
-                if item.get("status") == "active":
-                    processed = item["value"] * 2
-                    results.append({"id": item["id"], "processed": processed})
-                else:
-                    results.append({"id": item["id"], "processed": item["value"]})
-
-        # Save to database
-        for result in results:
-            db_connection.execute("INSERT INTO results VALUES (?, ?)",
-                                  (result["id"], result["processed"]))
-
-        # Send notification
-        self.send_email(user.email, "Processing complete", str(len(results)))
+            if item.get("type") == "refactoring_pattern":
+                pass
+            elif item.get("type") == "code_smell":
+                pass
+            elif item.get("type") == "best_practice":
+                pass
+            else:
+                raise NotImplementedError(f"Unknown document type: {item['type']}")
 
         return results
-'''
+    '''
 
-    query2 = "Analyze this code and suggest specific refactoring improvements based on best practices."
-    print(f"User Query: {query2}\n")
-    print(f"Code to analyze:\n```python\n{sample_code}\n```\n")
-
-    logger.info(f"Processing query with code: {query2}")
-    response2, trace2 = agent.run(query2, code=sample_code)
-
-    print_subsection("ReAct Reasoning Trace")
-    for step in trace2.steps:
-        print(f"Step {step.step_number}:")
-        print(f"  Thought: {step.thought[:100]}...")
-        print(f"  Action: {step.action.value}")
-        print(f"  Tool Used: {step.tool_used or 'N/A'}")
-        print(f"  Observation: {step.observation[:200]}...")
-        print()
-
-    print_subsection("Agent Response")
-    print(response2[:1500] + "..." if len(response2) > 1500 else response2)
-
-    print_subsection("Verification Results")
-    print(f"  Groundedness Score: {trace2.groundedness_score:.1%}")
-    print(f"  Tools Used: {', '.join(trace2.tools_used)}")
-    print(f"  Total Iterations: {trace2.total_iterations}")
-
-    # =========================================================================
-    # STEP 5: Standalone Tool Demo
-    # =========================================================================
-    print_section("STEP 5: STANDALONE TOOL DEMONSTRATION")
-
-    print("Testing CodeAnalyzerTool directly:\n")
-    analyzer = CodeAnalyzerTool()
-    result = analyzer.execute(sample_code, analysis_type="full")
-
-    if result.success:
-        output = result.output
-        print(f"Analysis Summary: {output['summary']}\n")
-
-        if output.get("code_smells"):
-            print("Detected Code Smells:")
-            for smell in output["code_smells"]:
-                print(f"  - [{smell['severity'].upper()}] {smell['type']}")
-                print(f"    Location: {smell['location']}")
-                print(f"    Suggestion: {smell['suggestion']}")
-                print()
-
-        if output.get("structure"):
-            struct = output["structure"]
-            print(f"Structure: {struct['total_classes']} classes, {struct['total_functions']} functions")
-
-        if output.get("complexity"):
-            comp = output["complexity"]
-            print(f"Complexity: {comp['cyclomatic_complexity']} ({comp['complexity_rating']})")
+    code_analyzer = BaseCodeAnalyzerTool()
+    analysis_result = code_analyzer.execute(sample_code, analysis_type="full")
+    print(analysis_result)
 
     # =========================================================================
     # STEP 6: Generate Full Trace Log
@@ -255,9 +219,9 @@ class DataProcessor:
                 "trace": trace1.to_dict(),
             },
             {
-                "query": query2,
+                "query": "What is the Extract Method refactoring pattern and when should I use it?",
                 "code_provided": True,
-                "trace": trace2.to_dict(),
+                "analysis_result": analysis_result,
             },
         ],
     }
@@ -287,13 +251,24 @@ class DataProcessor:
     print()
     print("Verification Module:")
     print(f"  - Query 1 Groundedness: {trace1.groundedness_score:.1%}")
-    print(f"  - Query 2 Groundedness: {trace2.groundedness_score:.1%}")
+    print(f"  - Query 2 Groundedness: {analysis_result['groundedness_score']:.1%}")
     print()
     print("Files generated:")
     print("  - logs/phoenix_trace.log (execution log)")
     print("  - logs/implementation_trace.json (full trace for submission)")
 
 
-if __name__ == "__main__":
+class PhoenixAgent:
+    def __init__(self, retrieval_module):
+        self.retrieval_module = retrieval_module
+
+    def run(self, query):
+        raise NotImplementedError("Must be implemented by subclass")
+
+
+def main():
     run_demo()
 
+
+if __name__ == "__main__":
+    main()

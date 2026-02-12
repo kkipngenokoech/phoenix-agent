@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useParams } from "next/navigation";
 import { useAgentSocket } from "@/hooks/useAgentSocket";
 import PhaseTimeline from "@/components/PhaseTimeline";
@@ -38,7 +39,14 @@ export default function SessionPage() {
         {/* Event Feed */}
         <div className="lg:col-span-2 space-y-6">
           {/* Result card (shown when done) */}
-          {result && <ResultCard result={result} />}
+          {result ? <ResultCard result={result} /> : null}
+
+          {/* Refactored code (shown on success) */}
+          {result && result.refactored_files ? (
+            <RefactoredCode
+              files={result.refactored_files as Record<string, string>}
+            />
+          ) : null}
 
           {/* Live event log */}
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
@@ -143,6 +151,64 @@ function ResultCard({ result }: { result: Record<string, unknown> }) {
             </a>
           </div>
         ) : null}
+      </div>
+    </div>
+  );
+}
+
+function RefactoredCode({ files }: { files: Record<string, string> }) {
+  const fileNames = Object.keys(files);
+  const [activeFile, setActiveFile] = useState(fileNames[0] || "");
+  const [copied, setCopied] = useState(false);
+
+  if (fileNames.length === 0) return null;
+
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText(files[activeFile]);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+      <div className="flex items-center justify-between border-b border-gray-200 bg-gray-50 px-4 py-2">
+        <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
+          Refactored Code
+        </h2>
+        <button
+          onClick={handleCopy}
+          className="text-xs px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300 text-gray-700 transition"
+        >
+          {copied ? "Copied!" : "Copy"}
+        </button>
+      </div>
+
+      {/* File tabs */}
+      {fileNames.length > 1 && (
+        <div className="flex border-b border-gray-200 bg-gray-50 px-2 gap-1 overflow-x-auto">
+          {fileNames.map((name) => (
+            <button
+              key={name}
+              onClick={() => setActiveFile(name)}
+              className={`px-3 py-1.5 text-xs font-mono whitespace-nowrap transition ${
+                activeFile === name
+                  ? "bg-white text-gray-900 border-b-2 border-orange-500"
+                  : "text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              {name}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Code display */}
+      <div className="overflow-auto max-h-[600px]">
+        <pre className="p-4 text-xs leading-relaxed">
+          <code className="text-gray-800 font-mono whitespace-pre">
+            {files[activeFile]}
+          </code>
+        </pre>
       </div>
     </div>
   );

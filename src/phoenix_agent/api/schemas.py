@@ -8,7 +8,11 @@ from pydantic import BaseModel
 
 
 class RefactorRequest(BaseModel):
+    input_type: str = "local_path"  # "local_path" | "pasted_code" | "github_url"
     target_path: str = "./sample_project"
+    pasted_code: Optional[str] = None
+    pasted_files: Optional[dict[str, str]] = None  # {filename: content}
+    github_url: Optional[str] = None
     request: str = "Refactor UserService to follow the Single Responsibility Principle"
 
 
@@ -18,7 +22,11 @@ class RefactorResponse(BaseModel):
 
 
 class AnalyzeRequest(BaseModel):
+    input_type: str = "local_path"
     target_path: str = "./sample_project"
+    pasted_code: Optional[str] = None
+    pasted_files: Optional[dict[str, str]] = None
+    github_url: Optional[str] = None
 
 
 class AnalyzeResponse(BaseModel):

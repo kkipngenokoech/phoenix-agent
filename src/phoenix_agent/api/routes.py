@@ -20,6 +20,12 @@ from phoenix_agent.api.schemas import (
 )
 from phoenix_agent.api.websocket import make_phase_callback, manager
 from phoenix_agent.config import PhoenixConfig
+from phoenix_agent.input_resolver import (
+    InputResolutionError,
+    cleanup_session,
+    register_temp,
+    resolve_input,
+)
 from phoenix_agent.memory.history import RefactoringHistory
 from phoenix_agent.memory.session import SessionMemory
 from phoenix_agent.tools.ast_parser import ASTParserTool
@@ -57,34 +63,42 @@ def init_shared_state(
 async def start_refactor(req: RefactorRequest) -> RefactorResponse:
     """Start a refactoring session. Runs the agent in a background thread."""
     from phoenix_agent.agent import PhoenixAgent
+    from phoenix_agent.models import RefactoringGoal
+
+    try:
+        resolved = resolve_input(
+            input_type=req.input_type,
+            target_path=req.target_path,
+            pasted_code=req.pasted_code,
+            pasted_files=req.pasted_files,
+            github_url=req.github_url,
+        )
+    except InputResolutionError as e:
+        return RefactorResponse(session_id="", status=f"error: {e}")
 
     loop = asyncio.get_running_loop()
     agent = PhoenixAgent(_config)
 
-    # Create a placeholder session_id by doing a quick session creation
-    from phoenix_agent.models import RefactoringGoal
-
     goal = RefactoringGoal(description=req.request, target_files=[])
-    session = agent.session_memory.create_session(goal, req.target_path)
+    session = agent.session_memory.create_session(goal, resolved.resolved_path)
     session_id = session.session_id
 
+    register_temp(session_id, resolved)
     callback = make_phase_callback(session_id, loop)
 
     def _run_agent() -> dict[str, Any]:
         try:
-            # Re-use the session the agent already knows about
-            result = agent.run(req.request, req.target_path, on_phase=callback)
+            result = agent.run(req.request, resolved.resolved_path, on_phase=callback)
             return result
         except Exception as e:
             logger.error(f"Agent error: {e}", exc_info=True)
             return {"status": "failed", "reason": str(e)}
         finally:
             agent.close()
-            # Signal the WebSocket consumer that the stream is done
+            cleanup_session(session_id)
             queue = manager.get_queue(session_id)
             loop.call_soon_threadsafe(queue.put_nowait, None)
 
-    # Fire and forget — clients follow via WebSocket
     loop.run_in_executor(_executor, _run_agent)
 
     return RefactorResponse(session_id=session_id, status="started")
@@ -93,26 +107,37 @@ async def start_refactor(req: RefactorRequest) -> RefactorResponse:
 @router.post("/analyze", response_model=AnalyzeResponse)
 async def run_analysis(req: AnalyzeRequest) -> AnalyzeResponse:
     """Run AST analysis + tests on a target project (synchronous, fast)."""
-    target = Path(req.target_path).resolve()
-    if not target.exists():
-        return AnalyzeResponse(files=[], test_results={"error": f"Path not found: {req.target_path}"})
+    try:
+        resolved = resolve_input(
+            input_type=req.input_type,
+            target_path=req.target_path,
+            pasted_code=req.pasted_code,
+            pasted_files=req.pasted_files,
+            github_url=req.github_url,
+        )
+    except InputResolutionError as e:
+        return AnalyzeResponse(files=[], test_results={"error": str(e)})
 
-    parser = ASTParserTool()
-    runner = TestRunnerTool()
+    target = Path(resolved.resolved_path)
+    try:
+        parser = ASTParserTool()
+        runner = TestRunnerTool()
 
-    py_files = sorted(
-        str(p)
-        for p in target.rglob("*.py")
-        if "__pycache__" not in str(p) and "test_" not in p.name and "/tests/" not in str(p)
-    )
+        py_files = sorted(
+            str(p)
+            for p in target.rglob("*.py")
+            if "__pycache__" not in str(p) and "test_" not in p.name and "/tests/" not in str(p)
+        )
 
-    ast_result = parser.execute(file_paths=py_files)
-    test_result = runner.execute(project_path=str(target), coverage_required=False)
+        ast_result = parser.execute(file_paths=py_files)
+        test_result = runner.execute(project_path=str(target), coverage_required=False)
 
-    files = ast_result.output.get("parsed_files", []) if ast_result.success else []
-    test_data = test_result.output if test_result.success else {"error": test_result.error}
+        files = ast_result.output.get("parsed_files", []) if ast_result.success else []
+        test_data = test_result.output if test_result.success else {"error": test_result.error}
 
-    return AnalyzeResponse(files=files, test_results=test_data)
+        return AnalyzeResponse(files=files, test_results=test_data)
+    finally:
+        resolved.cleanup()
 
 
 @router.get("/sessions", response_model=list[SessionSummary])
@@ -169,8 +194,14 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
 
     try:
         while True:
-            # Wait for the next event from the agent thread
-            event = await queue.get()
+            # Wait up to 15s for an event; send heartbeat if idle
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=15.0)
+            except asyncio.TimeoutError:
+                # Keep connection alive during long phases (e.g. ACT w/ Ollama)
+                await websocket.send_json({"type": "heartbeat"})
+                continue
+
             if event is None:
                 # Agent finished — send a final close signal
                 break

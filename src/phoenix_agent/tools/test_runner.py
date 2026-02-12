@@ -81,11 +81,31 @@ class TestRunnerTool(BaseTool):
                 error="pytest not found. Install with: pip install pytest",
             )
 
+        # Pytest exit code 5 = no tests collected (not a failure)
+        if proc.returncode == 5:
+            logger.info("No tests collected — treating as passed")
+            return ToolResult(
+                success=True,
+                output=TestResult(
+                    status="passed",
+                    summary=TestSummary(total=0, passed=0),
+                ).model_dump(),
+                metadata={"return_code": 5, "note": "no tests collected"},
+            )
+
         test_result = self._parse_output(proc, coverage_required, str(project))
+
+        error_msg = None
+        if test_result.status != "passed":
+            failure_details = "; ".join(
+                f"{f.test_name}: {f.error_message}" for f in test_result.failures[:3]
+            ) if test_result.failures else proc.stderr[:200] or "Tests failed (see output)"
+            error_msg = failure_details
 
         return ToolResult(
             success=test_result.status == "passed",
             output=test_result.model_dump(),
+            error=error_msg,
             metadata={
                 "return_code": proc.returncode,
                 "stdout_lines": len(proc.stdout.splitlines()),

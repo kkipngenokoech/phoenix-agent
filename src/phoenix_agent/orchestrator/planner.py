@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from phoenix_agent.llm_json import extract_json
 from phoenix_agent.models import (
     ObservationResult,
     ReasoningAnalysis,
@@ -17,40 +17,51 @@ from phoenix_agent.models import (
 
 logger = logging.getLogger(__name__)
 
-PLANNING_SYSTEM_PROMPT = """You are an expert refactoring planner. Given a code analysis and
-refactoring approach, create a detailed, ordered plan of steps to execute the refactoring.
+# Simplified prompt — do NOT ask for code_changes here.
+# Embedding Python code inside JSON strings is too error-prone for local models.
+# Actual code generation happens in the executor phase.
+PLANNING_SYSTEM_PROMPT = """You are an expert refactoring planner. Given a code analysis,
+create an ordered plan of steps.
 
-Each step should be a concrete action that maps to one of these tool actions:
-- "parse_code": Analyze a specific file's structure
-- "modify_code": Make specific code changes to a file (include the complete new file content)
-- "run_tests": Execute the test suite to validate changes
+Each step has an action:
+- "parse_code": Analyze a file's structure
+- "modify_code": Describe what code changes to make (the executor will generate the code)
+- "run_tests": Run the test suite
 
-Respond with valid JSON matching this schema:
+Respond with ONLY valid JSON, no other text:
 {
     "steps": [
         {
             "step_id": 1,
-            "action": "parse_code" | "modify_code" | "run_tests",
+            "action": "parse_code",
             "target_file": "path/to/file.py",
-            "description": "What this step does",
-            "dependencies": [],
-            "code_changes": "Complete new file content (only for modify_code)"
+            "description": "Analyze the current structure"
+        },
+        {
+            "step_id": 2,
+            "action": "modify_code",
+            "target_file": "path/to/file.py",
+            "description": "Extract the authentication methods into a new AuthService class"
+        },
+        {
+            "step_id": 3,
+            "action": "run_tests",
+            "target_file": "",
+            "description": "Run tests to validate changes"
         }
     ],
-    "rollback_strategy": "How to undo these changes if they fail",
-    "validation_checkpoints": [3, 5]
+    "rollback_strategy": "git reset --hard"
 }
 
-CRITICAL RULES:
-- For "modify_code" steps, code_changes MUST contain the COMPLETE new file content
-- Preserve ALL existing functionality - refactoring changes structure, not behavior
-- Include "run_tests" steps after modifications to validate
-- Keep step count reasonable (typically 5-15 steps)
-- Each step should be independently verifiable"""
+Rules:
+- Do NOT include code_changes — just describe what to change in "description"
+- Include run_tests steps after modifications
+- Keep to 3-8 steps
+- Respond with JSON only"""
 
-PLANNING_PROMPT = """Create a refactoring plan based on this analysis.
+PLANNING_PROMPT = """Create a refactoring plan.
 
-## Refactoring Approach
+## Approach
 {approach}
 
 ## Root Cause
@@ -65,7 +76,7 @@ PLANNING_PROMPT = """Create a refactoring plan based on this analysis.
 ## Expected Impact
 {expected_impact}
 
-Generate an ordered list of steps to execute this refactoring safely."""
+Respond with JSON only."""
 
 
 class Planner:
@@ -77,7 +88,6 @@ class Planner:
     ) -> RefactoringPlan:
         logger.info("PLAN: generating refactoring steps")
 
-        # Read the actual file contents for context
         code_content = self._read_target_files(analysis.files_to_modify)
 
         prompt = PLANNING_PROMPT.format(
@@ -95,23 +105,23 @@ class Planner:
 
         try:
             response = self._llm.invoke(messages)
-            plan = self._parse_response(response.content)
-            logger.info(f"PLAN complete: {len(plan.steps)} steps")
-            return plan
+            raw = response.content
+            logger.debug(f"PLAN raw LLM response ({len(raw)} chars): {raw[:500]}")
+            plan = self._parse_response(raw)
+            if plan.steps:
+                logger.info(f"PLAN complete: {len(plan.steps)} steps")
+                return plan
+            # LLM returned JSON but with empty/missing steps
+            logger.warning("PLAN: LLM returned no steps, generating default plan")
         except Exception as e:
             logger.error(f"Planning failed: {e}")
-            return RefactoringPlan(
-                steps=[],
-                rollback_strategy="git reset --hard to original commit",
-            )
+            logger.debug(f"PLAN: raw content was: {response.content[:500] if 'response' in dir() else 'N/A'}")
+
+        # Fallback: generate a default plan from the analysis
+        return self._default_plan(analysis)
 
     def _parse_response(self, content: str) -> RefactoringPlan:
-        text = content.strip()
-        if text.startswith("```"):
-            lines = text.splitlines()
-            text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-
-        data = json.loads(text)
+        data = extract_json(content)
 
         steps = []
         for s in data.get("steps", []):
@@ -128,6 +138,41 @@ class Planner:
             steps=steps,
             rollback_strategy=data.get("rollback_strategy", "git reset --hard"),
             validation_checkpoints=data.get("validation_checkpoints", []),
+        )
+
+    def _default_plan(self, analysis: ReasoningAnalysis) -> RefactoringPlan:
+        """Generate a sensible default plan when LLM parsing fails."""
+        steps = []
+        step_id = 1
+
+        for fp in analysis.files_to_modify:
+            steps.append(RefactoringStep(
+                step_id=step_id,
+                action="parse_code",
+                target_file=fp,
+                description=f"Analyze structure of {fp}",
+            ))
+            step_id += 1
+
+            steps.append(RefactoringStep(
+                step_id=step_id,
+                action="modify_code",
+                target_file=fp,
+                description=f"Apply refactoring: {analysis.approach}. {analysis.root_cause}",
+            ))
+            step_id += 1
+
+        steps.append(RefactoringStep(
+            step_id=step_id,
+            action="run_tests",
+            target_file="",
+            description="Run test suite to validate all changes",
+        ))
+
+        logger.info(f"PLAN (default): {len(steps)} steps for {len(analysis.files_to_modify)} files")
+        return RefactoringPlan(
+            steps=steps,
+            rollback_strategy="git reset --hard to original commit",
         )
 
     def _read_target_files(self, file_paths: list[str]) -> str:

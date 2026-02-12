@@ -152,6 +152,10 @@ class Updater:
 
         logger.info(f"UPDATE: refactoring complete. PR: {session.pr_url}")
 
+        # Read refactored files so the frontend can display them
+        # (especially important for pasted code where files live in a temp dir)
+        refactored_files = self._read_refactored_files(repo_path)
+
         return {
             "status": "success",
             "session_id": session.session_id,
@@ -160,6 +164,7 @@ class Updater:
             "duration_seconds": duration,
             "metrics_before": report.complexity_before,
             "metrics_after": report.complexity_after,
+            "refactored_files": refactored_files,
         }
 
     def finalize_failure(
@@ -221,3 +226,21 @@ class Updater:
         ])
 
         return "\n".join(lines)
+
+    @staticmethod
+    def _read_refactored_files(repo_path: str) -> dict[str, str]:
+        """Read all Python files from the target directory for the result payload."""
+        from pathlib import Path
+
+        files: dict[str, str] = {}
+        root = Path(repo_path)
+        for py_file in sorted(root.rglob("*.py")):
+            if "__pycache__" in str(py_file):
+                continue
+            try:
+                rel = str(py_file.relative_to(root))
+                content = py_file.read_text()
+                files[rel] = content
+            except Exception:
+                pass
+        return files

@@ -1,13 +1,23 @@
 "use client";
 
 import { useState } from "react";
-import { runAnalysis, ParsedFile, TestResults as TestResultsType } from "@/lib/api";
+import {
+  AnalyzeRequest,
+  InputType,
+  runAnalysis,
+  ParsedFile,
+  TestResults as TestResultsType,
+} from "@/lib/api";
+import InputTabs from "./InputTabs";
 import MetricsCard from "./MetricsCard";
 import CodeSmellList from "./CodeSmellList";
 import TestResults from "./TestResults";
 
 export default function AnalysisView() {
+  const [inputType, setInputType] = useState<InputType>("local_path");
   const [targetPath, setTargetPath] = useState("./sample_project");
+  const [pastedCode, setPastedCode] = useState("");
+  const [githubUrl, setGithubUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [files, setFiles] = useState<ParsedFile[] | null>(null);
   const [testResults, setTestResults] = useState<TestResultsType | null>(null);
@@ -17,7 +27,12 @@ export default function AnalysisView() {
     setLoading(true);
     setError(null);
     try {
-      const res = await runAnalysis(targetPath);
+      const req: AnalyzeRequest = { input_type: inputType };
+      if (inputType === "local_path") req.target_path = targetPath;
+      else if (inputType === "pasted_code") req.pasted_code = pastedCode;
+      else if (inputType === "github_url") req.github_url = githubUrl;
+
+      const res = await runAnalysis(req);
       setFiles(res.files);
       setTestResults(res.test_results);
     } catch (err) {
@@ -29,22 +44,24 @@ export default function AnalysisView() {
 
   return (
     <div className="space-y-6">
-      <div className="flex gap-3">
-        <input
-          type="text"
-          value={targetPath}
-          onChange={(e) => setTargetPath(e.target.value)}
-          className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-orange-400 focus:border-orange-400 outline-none"
-          placeholder="Project path..."
-        />
-        <button
-          onClick={handleAnalyze}
-          disabled={loading}
-          className="bg-gray-900 text-white rounded-lg px-4 py-2 text-sm font-medium hover:bg-gray-800 disabled:opacity-50 transition"
-        >
-          {loading ? "Analyzing..." : "Run Analysis"}
-        </button>
-      </div>
+      <InputTabs
+        inputType={inputType}
+        onInputTypeChange={setInputType}
+        targetPath={targetPath}
+        onTargetPathChange={setTargetPath}
+        pastedCode={pastedCode}
+        onPastedCodeChange={setPastedCode}
+        githubUrl={githubUrl}
+        onGithubUrlChange={setGithubUrl}
+      />
+
+      <button
+        onClick={handleAnalyze}
+        disabled={loading}
+        className="w-full bg-gray-900 text-white rounded-lg px-4 py-2.5 text-sm font-medium hover:bg-gray-800 disabled:opacity-50 transition"
+      >
+        {loading ? "Analyzing..." : "Run Analysis"}
+      </button>
 
       {error && (
         <div className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>

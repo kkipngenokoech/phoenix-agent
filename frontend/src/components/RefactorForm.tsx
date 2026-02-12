@@ -2,11 +2,15 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { startRefactor } from "@/lib/api";
+import { InputType, RefactorRequest, startRefactor } from "@/lib/api";
+import InputTabs from "./InputTabs";
 
 export default function RefactorForm() {
   const router = useRouter();
+  const [inputType, setInputType] = useState<InputType>("local_path");
   const [targetPath, setTargetPath] = useState("./sample_project");
+  const [pastedCode, setPastedCode] = useState("");
+  const [githubUrl, setGithubUrl] = useState("");
   const [request, setRequest] = useState(
     "Refactor UserService to follow the Single Responsibility Principle. " +
       "Extract authentication, validation, persistence, and notification into separate classes."
@@ -19,7 +23,16 @@ export default function RefactorForm() {
     setLoading(true);
     setError(null);
     try {
-      const res = await startRefactor({ target_path: targetPath, request });
+      const req: RefactorRequest = { input_type: inputType, request };
+      if (inputType === "local_path") req.target_path = targetPath;
+      else if (inputType === "pasted_code") req.pasted_code = pastedCode;
+      else if (inputType === "github_url") req.github_url = githubUrl;
+
+      const res = await startRefactor(req);
+      if (res.status.startsWith("error")) {
+        setError(res.status);
+        return;
+      }
       router.push(`/session/${res.session_id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to start refactoring");
@@ -30,17 +43,16 @@ export default function RefactorForm() {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">
-          Target Project Path
-        </label>
-        <input
-          type="text"
-          value={targetPath}
-          onChange={(e) => setTargetPath(e.target.value)}
-          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-orange-400 focus:border-orange-400 outline-none"
-        />
-      </div>
+      <InputTabs
+        inputType={inputType}
+        onInputTypeChange={setInputType}
+        targetPath={targetPath}
+        onTargetPathChange={setTargetPath}
+        pastedCode={pastedCode}
+        onPastedCodeChange={setPastedCode}
+        githubUrl={githubUrl}
+        onGithubUrlChange={setGithubUrl}
+      />
 
       <div>
         <label className="block text-sm font-medium text-gray-700 mb-1">

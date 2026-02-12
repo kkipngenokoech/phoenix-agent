@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
+
+from phoenix_agent.llm_json import extract_json
 
 from phoenix_agent.models import (
     ObservationResult,
@@ -96,13 +97,7 @@ class Reasoner:
             )
 
     def _parse_response(self, content: str) -> ReasoningAnalysis:
-        # Strip markdown code fences if present
-        text = content.strip()
-        if text.startswith("```"):
-            lines = text.splitlines()
-            text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-
-        data = json.loads(text)
+        data = extract_json(content)
 
         risk = data.get("risk_assessment", "MEDIUM").upper()
         if risk not in ("LOW", "MEDIUM", "HIGH"):

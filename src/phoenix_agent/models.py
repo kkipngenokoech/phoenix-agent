@@ -31,6 +31,7 @@ class SessionStatus(str, Enum):
     TIMEOUT = "timeout"
     REJECTED = "rejected"
     AWAITING_APPROVAL = "awaiting_approval"
+    AWAITING_REVIEW = "awaiting_review"
 
 
 class RiskLevel(str, Enum):
@@ -316,3 +317,36 @@ class IterationData(BaseModel):
     tool_results: list[dict] = Field(default_factory=list)
     verification: Optional[dict] = None
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+# ---------------------------------------------------------------------------
+# Review / Human-in-the-Loop
+# ---------------------------------------------------------------------------
+
+class FileDiff(BaseModel):
+    """Before/after diff for a single file."""
+    file_path: str
+    relative_path: str
+    original_content: str
+    modified_content: str
+    unified_diff: str
+    lines_added: int = 0
+    lines_removed: int = 0
+
+
+class ReviewPayload(BaseModel):
+    """Full review package sent to the frontend for approval."""
+    session_id: str
+    files: list[FileDiff] = Field(default_factory=list)
+    test_result: Optional[TestResult] = None
+    coverage_pct: float = 0.0
+    complexity_before: dict[str, int] = Field(default_factory=dict)
+    complexity_after: dict[str, int] = Field(default_factory=dict)
+    risk_score: float = 0.0
+    plan_summary: str = ""
+
+
+class ReviewVerdict(BaseModel):
+    """User's approval or rejection of proposed changes."""
+    approved: bool
+    comment: str = ""

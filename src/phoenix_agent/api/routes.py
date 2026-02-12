@@ -182,6 +182,46 @@ async def get_session(session_id: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Review Endpoints (human-in-the-loop approval)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/sessions/{session_id}/review")
+async def get_review(session_id: str) -> dict:
+    """Fetch the review payload for a session (used when reconnecting)."""
+    if not _session_memory:
+        return {"error": "Session memory not available"}
+    review = _session_memory.get_review(session_id)
+    if not review:
+        return {"error": "No review found for this session"}
+    return review.model_dump(mode="json")
+
+
+@router.post("/sessions/{session_id}/review")
+async def submit_review(session_id: str, body: dict) -> dict:
+    """Submit approval or rejection for a pending diff review."""
+    from phoenix_agent.api.agent_registry import submit_verdict
+    from phoenix_agent.models import ReviewVerdict, SessionStatus
+
+    if _session_memory:
+        session = _session_memory.get_session(session_id)
+        if not session:
+            return {"error": "Session not found"}
+        if session.status != SessionStatus.AWAITING_REVIEW:
+            return {"error": f"Session is not awaiting review (status: {session.status})"}
+
+    verdict = ReviewVerdict(
+        approved=body.get("approved", False),
+        comment=body.get("comment", ""),
+    )
+    success = submit_verdict(session_id, verdict)
+    if not success:
+        return {"error": "No pending review for this session"}
+
+    return {"status": "ok", "session_id": session_id, "approved": verdict.approved}
+
+
+# ---------------------------------------------------------------------------
 # WebSocket Endpoint
 # ---------------------------------------------------------------------------
 
@@ -199,7 +239,10 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
                 event = await asyncio.wait_for(queue.get(), timeout=15.0)
             except asyncio.TimeoutError:
                 # Keep connection alive during long phases (e.g. ACT w/ Ollama)
-                await websocket.send_json({"type": "heartbeat"})
+                try:
+                    await websocket.send_json({"type": "heartbeat"})
+                except (WebSocketDisconnect, RuntimeError):
+                    break
                 continue
 
             if event is None:
@@ -208,6 +251,9 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
             await manager.send_event(session_id, event)
     except WebSocketDisconnect:
         logger.info(f"Client disconnected from session {session_id}")
+    except RuntimeError as e:
+        # "Cannot call 'send' once a close message has been sent"
+        logger.info(f"WebSocket already closed for {session_id}: {e}")
     except Exception as e:
         logger.error(f"WebSocket error for {session_id}: {e}")
     finally:

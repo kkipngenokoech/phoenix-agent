@@ -6,11 +6,13 @@ OBSERVE → REASON → PLAN → DECIDE → ACT → VERIFY → UPDATE
 
 from __future__ import annotations
 
+import difflib
 import logging
 import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from phoenix_agent.api import agent_registry
 from phoenix_agent.config import PhoenixConfig
 from phoenix_agent.llm.provider import create_llm
 from phoenix_agent.memory.history import RefactoringHistory
@@ -18,9 +20,14 @@ from phoenix_agent.memory.knowledge_graph import CodebaseGraph
 from phoenix_agent.memory.session import SessionMemory
 from phoenix_agent.models import (
     AgentPhase,
+    Decision,
+    FileDiff,
     RefactoringGoal,
+    RefactoringPlan,
+    ReviewPayload,
     SessionState,
     SessionStatus,
+    VerificationReport,
 )
 from phoenix_agent.orchestrator.arbiter import Arbiter
 from phoenix_agent.orchestrator.executor import Executor
@@ -125,7 +132,9 @@ class PhoenixAgent:
                     session, iteration, request, str(target), start_time
                 )
                 if result is not None:
+                    logger.info(f"Emitting completed event (status={result.get('status')})")
                     self._emit("completed", data=result, iteration=iteration)
+                    logger.info("Agent run complete — returning")
                     return result
             except Exception as e:
                 logger.error(f"Iteration {iteration} failed: {e}", exc_info=True)
@@ -247,8 +256,48 @@ class PhoenixAgent:
         emit("phase_update", phase="UPDATE", iteration=iteration)
 
         if report.tests_passed and report.improved:
-            # Success!
-            return self.updater.finalize_success(session, report, start_time)
+            # Build diff review and wait for user approval
+            review = self._build_review_payload(
+                session, step_results, report, plan, decision,
+            )
+            self.session_memory.store_review(session.session_id, review)
+
+            session.status = SessionStatus.AWAITING_REVIEW
+            self.session_memory.update_session(session)
+            emit("review_requested", data=review, iteration=iteration)
+
+            # Block thread until user approves or rejects
+            approval_event = agent_registry.register_review(session.session_id)
+            logger.info("Waiting for user review approval...")
+            try:
+                approved = approval_event.wait(
+                    timeout=self.config.agent.review_timeout
+                )
+                verdict = agent_registry.get_verdict(session.session_id)
+
+                if not approved or (verdict and not verdict.approved):
+                    reason = "Review timed out" if not approved else "Rejected by reviewer"
+                    if verdict and verdict.comment:
+                        reason += f": {verdict.comment}"
+                    logger.info(f"Review result: {reason}")
+                    self.git_ops.execute(
+                        operation="reset",
+                        repository_path=target_path,
+                        parameters={"target": "HEAD", "mode": "hard"},
+                    )
+                    session.status = SessionStatus.REJECTED
+                    self.session_memory.update_session(session)
+                    return self.updater.finalize_failure(session, reason, start_time)
+
+                logger.info("Review approved — finalizing")
+            finally:
+                agent_registry.cleanup(session.session_id)
+
+            session.status = SessionStatus.ACTIVE
+            logger.info("Calling finalize_success...")
+            result = self.updater.finalize_success(session, report, start_time)
+            logger.info("finalize_success complete — returning result")
+            return result
 
         elif not report.tests_passed:
             logger.warning("Tests failed after refactoring")
@@ -280,11 +329,74 @@ class PhoenixAgent:
             SessionStatus.FAILED,
             SessionStatus.REJECTED,
             SessionStatus.AWAITING_APPROVAL,
+            SessionStatus.AWAITING_REVIEW,
         ):
             return True
         if iteration >= max_iterations:
             return True
         return False
+
+    def _build_review_payload(
+        self,
+        session: SessionState,
+        step_results: list[dict],
+        report: VerificationReport,
+        plan: RefactoringPlan,
+        decision: Decision,
+    ) -> ReviewPayload:
+        """Build the diff review package from execution results."""
+        file_diffs: list[FileDiff] = []
+
+        for result in step_results:
+            if result.get("action") != "modify_code" or not result.get("success"):
+                continue
+
+            file_path = result["target_file"]
+            original = (result.get("metadata") or {}).get("original_content", "")
+            target = Path(file_path)
+            modified = target.read_text() if target.exists() else ""
+
+            rel_path = file_path
+            try:
+                rel_path = str(Path(file_path).relative_to(session.target_path))
+            except ValueError:
+                pass
+
+            diff_lines = list(difflib.unified_diff(
+                original.splitlines(keepends=True),
+                modified.splitlines(keepends=True),
+                fromfile=f"a/{rel_path}",
+                tofile=f"b/{rel_path}",
+            ))
+            unified = "".join(diff_lines)
+
+            added = sum(1 for l in diff_lines if l.startswith("+") and not l.startswith("+++"))
+            removed = sum(1 for l in diff_lines if l.startswith("-") and not l.startswith("---"))
+
+            file_diffs.append(FileDiff(
+                file_path=file_path,
+                relative_path=rel_path,
+                original_content=original,
+                modified_content=modified,
+                unified_diff=unified,
+                lines_added=added,
+                lines_removed=removed,
+            ))
+
+        plan_summary = "; ".join(
+            s.description for s in plan.steps if s.action == "modify_code"
+        )
+
+        return ReviewPayload(
+            session_id=session.session_id,
+            files=file_diffs,
+            test_result=report.test_result,
+            coverage_pct=report.coverage_pct,
+            complexity_before=report.complexity_before,
+            complexity_after=report.complexity_after,
+            risk_score=decision.risk_score.total_score,
+            plan_summary=plan_summary,
+        )
 
     def close(self) -> None:
         """Clean up resources."""

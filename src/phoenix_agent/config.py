@@ -48,6 +48,7 @@ class AgentConfig(BaseModel):
     tool_timeout_seconds: int = 300  # 5 minutes
     high_risk_threshold: float = 7.0
     medium_risk_threshold: float = 4.0
+    review_timeout: int = 3600  # 1 hour for user to approve/reject diffs
 
 
 class PhoenixConfig(BaseModel):

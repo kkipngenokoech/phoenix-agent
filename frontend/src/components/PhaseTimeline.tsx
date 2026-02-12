@@ -28,9 +28,10 @@ interface Props {
   currentPhase: string | null;
   events: PhaseEvent[];
   iteration: number;
+  isReviewing?: boolean;
 }
 
-export default function PhaseTimeline({ currentPhase, events, iteration }: Props) {
+export default function PhaseTimeline({ currentPhase, events, iteration, isReviewing = false }: Props) {
   const completedPhases = new Set(
     events.filter((e) => e.type === "phase_update" && e.phase).map((e) => e.phase!)
   );
@@ -88,6 +89,11 @@ export default function PhaseTimeline({ currentPhase, events, iteration }: Props
                   events={events.filter((e) => e.phase === phase)}
                   collapsed
                 />
+              )}
+              {phase === "VERIFY" && isReviewing && (
+                <div className="text-xs mt-1 bg-amber-50 text-amber-700 rounded p-2 font-medium animate-pulse">
+                  Awaiting your review...
+                </div>
               )}
             </div>
           </div>

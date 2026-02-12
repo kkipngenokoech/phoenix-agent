@@ -46,6 +46,8 @@ class ConnectionManager:
                 dead.append(ws)
         for ws in dead:
             self.disconnect(session_id, ws)
+        if dead and not self._connections.get(session_id):
+            logger.info(f"All WebSocket clients disconnected for session {session_id}")
 
     def get_queue(self, session_id: str) -> asyncio.Queue:
         """Get or create an event queue for a session."""

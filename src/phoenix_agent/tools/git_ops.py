@@ -166,6 +166,14 @@ class GitOperationsTool(BaseTool):
         target_branch = params.get("target_branch", "main")
         labels = params.get("labels", [])
 
+        # Skip entirely if no remote configured (e.g. pasted code temp repos)
+        if not repo.remotes:
+            return GitOperationResult(
+                status="failed",
+                operation="create_pr",
+                error={"code": "no_remote", "message": "No git remote configured — skipping push and PR"},
+            )
+
         # Push the branch first
         try:
             repo.git.push("--set-upstream", "origin", source_branch)

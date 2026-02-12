@@ -87,64 +87,84 @@ class Updater:
         branch_name = f"phoenix/refactor-{session.session_id}"
 
         # 1. Create branch
-        branch_result = self._git_ops.execute(
-            operation="create_branch",
-            repository_path=repo_path,
-            parameters={"branch_name": branch_name, "base_branch": "main"},
-        )
-        if branch_result.success:
-            session.branch_name = branch_name
+        try:
+            branch_result = self._git_ops.execute(
+                operation="create_branch",
+                repository_path=repo_path,
+                parameters={"branch_name": branch_name, "base_branch": "main"},
+            )
+            if branch_result.success:
+                session.branch_name = branch_name
+            logger.info(f"UPDATE: branch create → {branch_result.success}")
+        except Exception as e:
+            logger.warning(f"UPDATE: branch creation failed: {e}")
 
         # 2. Commit changes
-        commit_msg = (
-            f"refactor: {session.goal.description}\n\n"
-            f"Session: {session.session_id}\n"
-            f"Complexity: {report.complexity_before} → {report.complexity_after}\n"
-            f"Tests: {'passing' if report.tests_passed else 'failing'}"
-        )
-        commit_result = self._git_ops.execute(
-            operation="commit",
-            repository_path=repo_path,
-            parameters={"commit_message": commit_msg},
-        )
+        try:
+            commit_msg = (
+                f"refactor: {session.goal.description}\n\n"
+                f"Session: {session.session_id}\n"
+                f"Complexity: {report.complexity_before} → {report.complexity_after}\n"
+                f"Tests: {'passing' if report.tests_passed else 'failing'}"
+            )
+            commit_result = self._git_ops.execute(
+                operation="commit",
+                repository_path=repo_path,
+                parameters={"commit_message": commit_msg},
+            )
+            logger.info(f"UPDATE: commit → {commit_result.success}")
+        except Exception as e:
+            logger.warning(f"UPDATE: commit failed: {e}")
 
-        # 3. Create PR
-        pr_description = self._build_pr_description(session, report)
-        pr_result = self._git_ops.execute(
-            operation="create_pr",
-            repository_path=repo_path,
-            parameters={
-                "title": f"Refactor: {session.goal.description[:60]}",
-                "description": pr_description,
-                "source_branch": branch_name,
-                "target_branch": "main",
-                "labels": ["refactoring", "phoenix-agent"],
-            },
-        )
-        if pr_result.success and pr_result.output:
-            session.pr_url = pr_result.output.get("result", {}).get("pr_url")
+        # 3. Create PR (skipped automatically for repos without a remote)
+        try:
+            pr_description = self._build_pr_description(session, report)
+            pr_result = self._git_ops.execute(
+                operation="create_pr",
+                repository_path=repo_path,
+                parameters={
+                    "title": f"Refactor: {session.goal.description[:60]}",
+                    "description": pr_description,
+                    "source_branch": branch_name,
+                    "target_branch": "main",
+                    "labels": ["refactoring", "phoenix-agent"],
+                },
+            )
+            if pr_result.success and pr_result.output:
+                session.pr_url = pr_result.output.get("result", {}).get("pr_url")
+            logger.info(f"UPDATE: PR create → {pr_result.success} (url={session.pr_url})")
+        except Exception as e:
+            logger.warning(f"UPDATE: PR creation failed: {e}")
 
         # 4. Write to long-term memory (PostgreSQL)
         duration = time.time() - start_time
-        record = RefactoringRecord(
-            session_id=session.session_id,
-            files_modified=list(report.complexity_after.keys()),
-            risk_score=0.0,
-            metrics_before=report.complexity_before,
-            metrics_after=report.complexity_after,
-            pr_url=session.pr_url,
-            outcome="success",
-            duration_seconds=duration,
-        )
-        self._history.record_refactoring(record)
+        try:
+            record = RefactoringRecord(
+                session_id=session.session_id,
+                files_modified=list(report.complexity_after.keys()),
+                risk_score=0.0,
+                metrics_before=report.complexity_before,
+                metrics_after=report.complexity_after,
+                pr_url=session.pr_url,
+                outcome="success",
+                duration_seconds=duration,
+            )
+            self._history.record_refactoring(record)
+            logger.info("UPDATE: history record written")
+        except Exception as e:
+            logger.warning(f"UPDATE: history write failed: {e}")
 
         # 5. Update knowledge graph (Neo4j)
-        modified_files = list(report.complexity_after.keys())
-        if modified_files:
-            ast_result = self._ast_parser.execute(file_paths=modified_files)
-            if ast_result.success:
-                analysis = ASTAnalysisResult.model_validate(ast_result.output)
-                self._graph.update_from_analysis(analysis)
+        try:
+            modified_files = list(report.complexity_after.keys())
+            if modified_files:
+                ast_result = self._ast_parser.execute(file_paths=modified_files)
+                if ast_result.success:
+                    analysis = ASTAnalysisResult.model_validate(ast_result.output)
+                    self._graph.update_from_analysis(analysis)
+            logger.info("UPDATE: knowledge graph updated")
+        except Exception as e:
+            logger.warning(f"UPDATE: knowledge graph update failed: {e}")
 
         # 6. Update session status
         session.status = SessionStatus.COMPLETED

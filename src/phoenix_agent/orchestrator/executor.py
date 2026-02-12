@@ -62,6 +62,7 @@ class Executor:
                     "output": result.output,
                     "error": result.error,
                     "execution_time_ms": result.execution_time_ms,
+                    "metadata": result.metadata,
                 }
                 results.append(step_result)
 

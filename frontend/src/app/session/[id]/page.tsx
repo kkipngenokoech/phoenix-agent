@@ -1,16 +1,37 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { useAgentSocket } from "@/hooks/useAgentSocket";
+import { ReviewPayload, getReview } from "@/lib/api";
 import PhaseTimeline from "@/components/PhaseTimeline";
+import DiffReview from "@/components/DiffReview";
 import MetricsCard from "@/components/MetricsCard";
 
 export default function SessionPage() {
   const params = useParams();
   const sessionId = params.id as string;
-  const { events, status, currentPhase, iteration, result } =
+  const { events, status, currentPhase, iteration, result, reviewPayload } =
     useAgentSocket(sessionId);
+
+  const [fetchedReview, setFetchedReview] = useState<ReviewPayload | null>(
+    null
+  );
+  const [reviewComplete, setReviewComplete] = useState(false);
+
+  // Reconnect recovery: if we have no reviewPayload from WebSocket but
+  // there was a review event, fetch via REST
+  useEffect(() => {
+    if (reviewPayload || fetchedReview || !sessionId) return;
+    const hasReviewEvent = events.some((e) => e.type === "review_requested");
+    if (!hasReviewEvent) return;
+
+    getReview(sessionId)
+      .then(setFetchedReview)
+      .catch(() => {});
+  }, [events, reviewPayload, fetchedReview, sessionId]);
+
+  const activeReview = reviewPayload || fetchedReview;
 
   return (
     <div className="space-y-8">
@@ -33,11 +54,21 @@ export default function SessionPage() {
             currentPhase={currentPhase}
             events={events}
             iteration={iteration}
+            isReviewing={status === "reviewing" && !reviewComplete}
           />
         </div>
 
         {/* Event Feed */}
         <div className="lg:col-span-2 space-y-6">
+          {/* Diff Review (shown when awaiting approval) */}
+          {activeReview && !reviewComplete && !result ? (
+            <DiffReview
+              sessionId={sessionId}
+              payload={activeReview}
+              onComplete={() => setReviewComplete(true)}
+            />
+          ) : null}
+
           {/* Result card (shown when done) */}
           {result ? <ResultCard result={result} /> : null}
 
@@ -92,6 +123,7 @@ function StatusBadge({ status }: { status: string }) {
     disconnected: "bg-gray-100 text-gray-600",
     connecting: "bg-yellow-100 text-yellow-700",
     connected: "bg-green-100 text-green-700",
+    reviewing: "bg-amber-100 text-amber-700",
     done: "bg-blue-100 text-blue-700",
   };
   return (

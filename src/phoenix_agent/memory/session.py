@@ -12,6 +12,7 @@ from phoenix_agent.config import PhoenixConfig
 from phoenix_agent.models import (
     IterationData,
     RefactoringGoal,
+    ReviewPayload,
     SessionState,
     SessionStatus,
 )
@@ -97,6 +98,22 @@ class SessionMemory:
             iterations.append(data)
             i += 1
         return iterations
+
+    # ------------------------------------------------------------------
+    # Review payloads (for human-in-the-loop approval)
+    # ------------------------------------------------------------------
+
+    def store_review(self, session_id: str, payload: ReviewPayload) -> None:
+        """Store the review payload so reconnecting clients can fetch it."""
+        key = f"phoenix:review:{session_id}"
+        self._set(key, payload.model_dump_json())
+
+    def get_review(self, session_id: str) -> Optional[ReviewPayload]:
+        """Retrieve the stored review payload."""
+        raw = self._get(f"phoenix:review:{session_id}")
+        if raw:
+            return ReviewPayload.model_validate_json(raw)
+        return None
 
     def delete_session(self, session_id: str) -> None:
         self._delete(f"{SESSION_PREFIX}:{session_id}")

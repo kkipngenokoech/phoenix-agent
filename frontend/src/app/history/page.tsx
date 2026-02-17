@@ -1,112 +1,127 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
-import { getSessions, SessionSummary } from "@/lib/api";
+import Layout from "@/components/Layout";
+import { CheckCircle, XCircle, Clock } from "lucide-react";
+
+// This mirrors the SessionSummary schema from the backend
+interface HistoryRecord {
+  session_id: string;
+  outcome: "success" | "failed" | "timeout" | "rejected";
+  duration_seconds: number;
+  files_modified: string[];
+  pr_url: string | null;
+  timestamp: string;
+}
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+async function getHistory(): Promise<HistoryRecord[]> {
+  const res = await fetch(`${API_BASE_URL}/api/sessions`);
+  if (!res.ok) {
+    throw new Error("Failed to fetch session history");
+  }
+  return res.json();
+}
+
+const OutcomeBadge = ({ outcome }: { outcome: HistoryRecord["outcome"] }) => {
+  const styles = {
+    success: "bg-green-100 text-green-800",
+    failed: "bg-red-100 text-red-800",
+    timeout: "bg-yellow-100 text-yellow-800",
+    rejected: "bg-amber-100 text-amber-800",
+  };
+  const icons = {
+    success: <CheckCircle size={16} />,
+    failed: <XCircle size={16} />,
+    timeout: <Clock size={16} />,
+    rejected: <XCircle size={16} />,
+  };
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${
+        styles[outcome] || "bg-gray-100 text-gray-800"
+      }`}
+    >
+      {icons[outcome]}
+      {outcome.charAt(0).toUpperCase() + outcome.slice(1)}
+    </span>
+  );
+};
+
 
 export default function HistoryPage() {
-  const [sessions, setSessions] = useState<SessionSummary[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [history, setHistory] = useState<HistoryRecord[]>([]);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const load = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await getSessions();
-      setSessions(data);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load history");
-    } finally {
-      setLoading(false);
-    }
-  };
-
   useEffect(() => {
-    load();
+    getHistory()
+      .then((data) => {
+        // Sort by most recent first
+        const sortedData = data.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        setHistory(sortedData);
+      })
+      .catch(() => {
+        setError("Could not connect to the API server. Is it running?");
+      })
+      .finally(() => {
+        setLoading(false);
+      });
   }, []);
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">Refactoring History</h1>
-        <button
-          onClick={load}
-          disabled={loading}
-          className="text-sm bg-gray-900 text-white rounded-lg px-4 py-2 hover:bg-gray-800 disabled:opacity-50 transition"
-        >
-          {loading ? "Loading..." : "Refresh"}
-        </button>
+    <Layout>
+      <div className="mb-10">
+        <h1 className="text-3xl font-bold text-gray-900">Session History</h1>
+        <p className="mt-2 text-gray-600">
+          Browse through past refactoring sessions.
+        </p>
       </div>
 
-      {error && (
-        <div className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">
-          {error}
-        </div>
-      )}
-
-      {sessions.length === 0 && !loading && !error && (
-        <div className="text-center py-16 text-gray-400">
-          <p className="text-lg">No refactoring sessions yet</p>
-          <p className="text-sm mt-1">
-            Start a refactoring from the{" "}
-            <Link href="/" className="text-orange-500 hover:underline">
-              Dashboard
-            </Link>
-          </p>
-        </div>
-      )}
-
-      <div className="space-y-3">
-        {sessions.map((s) => {
-          const isSuccess = s.outcome === "success";
-          return (
-            <Link
-              key={s.session_id}
-              href={`/session/${s.session_id}`}
-              className="block bg-white border border-gray-200 rounded-lg p-4 hover:border-orange-300 hover:shadow-sm transition"
-            >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <span
-                    className={`w-2 h-2 rounded-full ${
-                      isSuccess ? "bg-green-500" : "bg-red-500"
-                    }`}
-                  />
-                  <span className="text-sm font-mono text-gray-800">
-                    {s.session_id}
-                  </span>
-                  <span
-                    className={`text-xs px-2 py-0.5 rounded ${
-                      isSuccess
-                        ? "bg-green-100 text-green-700"
-                        : "bg-red-100 text-red-700"
-                    }`}
-                  >
-                    {s.outcome}
-                  </span>
-                </div>
-                <div className="text-xs text-gray-400">
-                  {s.duration_seconds.toFixed(1)}s
-                  {s.timestamp && (
-                    <span className="ml-3">
-                      {new Date(s.timestamp).toLocaleDateString()}
-                    </span>
-                  )}
-                </div>
-              </div>
-              {s.files_modified.length > 0 && (
-                <div className="mt-2 text-xs text-gray-500">
-                  Modified: {s.files_modified.join(", ")}
-                </div>
-              )}
-              {s.pr_url && (
-                <div className="mt-1 text-xs text-blue-500">{s.pr_url}</div>
-              )}
-            </Link>
-          );
-        })}
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-lg shadow-gray-200/50 overflow-hidden">
+        {loading && (
+           <div className="p-12 text-center text-gray-500">Loading history...</div>
+        )}
+        {error && (
+            <div className="p-12 text-center text-red-600 bg-red-50">{error}</div>
+        )}
+        {!loading && !error && history.length === 0 && (
+            <div className="p-12 text-center text-gray-500">No history found.</div>
+        )}
+        {!loading && !error && history.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 text-left">
+                <tr>
+                  <th className="px-6 py-3 font-semibold text-gray-600">Session ID</th>
+                  <th className="px-6 py-3 font-semibold text-gray-600">Outcome</th>
+                  <th className="px-6 py-3 font-semibold text-gray-600">Duration</th>
+                  <th className="px-6 py-3 font-semibold text-gray-600">Modified Files</th>
+                  <th className="px-6 py-3 font-semibold text-gray-600">Date</th>
+                  <th className="px-6 py-3 font-semibold text-gray-600"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {history.map((record) => (
+                  <tr key={record.session_id}>
+                    <td className="px-6 py-4 whitespace-nowrap font-mono text-gray-700">{record.session_id}</td>
+                    <td className="px-6 py-4 whitespace-nowrap"><OutcomeBadge outcome={record.outcome} /></td>
+                    <td className="px-6 py-4 whitespace-nowrap text-gray-600">{record.duration_seconds.toFixed(1)}s</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-gray-600">{record.files_modified.length}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-gray-600">{new Date(record.timestamp).toLocaleString()}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-right">
+                       <a href={`/session/${record.session_id}`} className="font-semibold text-orange-600 hover:text-orange-800">
+                        View
+                      </a>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
-    </div>
+    </Layout>
   );
 }

@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
 from phoenix_agent.api.schemas import (
     AnalyzeRequest,
@@ -55,6 +56,45 @@ def init_shared_state(
 
 
 # ---------------------------------------------------------------------------
+# Directory Browser
+# ---------------------------------------------------------------------------
+
+
+@router.get("/browse")
+async def browse_directory(path: str = Query(default="~")) -> dict:
+    """List subdirectories at the given path for the folder picker."""
+    try:
+        target = Path(path).expanduser().resolve()
+        if not target.is_dir():
+            return {"error": f"Not a directory: {path}"}
+
+        entries = []
+        try:
+            for child in sorted(target.iterdir()):
+                if child.name.startswith("."):
+                    continue
+                if child.is_dir():
+                    entries.append({
+                        "name": child.name,
+                        "path": str(child),
+                        "has_children": any(
+                            c.is_dir() for c in child.iterdir()
+                            if not c.name.startswith(".")
+                        ) if os.access(str(child), os.R_OK) else False,
+                    })
+        except PermissionError:
+            return {"error": f"Permission denied: {target}"}
+
+        return {
+            "current": str(target),
+            "parent": str(target.parent) if target != target.parent else None,
+            "entries": entries,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ---------------------------------------------------------------------------
 # REST Endpoints
 # ---------------------------------------------------------------------------
 
@@ -88,7 +128,12 @@ async def start_refactor(req: RefactorRequest) -> RefactorResponse:
 
     def _run_agent() -> dict[str, Any]:
         try:
-            result = agent.run(req.request, resolved.resolved_path, on_phase=callback)
+            result = agent.run(
+                req.request,
+                resolved.resolved_path,
+                on_phase=callback,
+                session_id=session_id,
+            )
             return result
         except Exception as e:
             logger.error(f"Agent error: {e}", exc_info=True)
@@ -207,8 +252,8 @@ async def submit_review(session_id: str, body: dict) -> dict:
         session = _session_memory.get_session(session_id)
         if not session:
             return {"error": "Session not found"}
-        if session.status != SessionStatus.AWAITING_REVIEW:
-            return {"error": f"Session is not awaiting review (status: {session.status})"}
+        if session.status not in (SessionStatus.AWAITING_REVIEW, SessionStatus.AWAITING_APPROVAL):
+            return {"error": f"Session is not awaiting review/approval (status: {session.status})"}
 
     verdict = ReviewVerdict(
         approved=body.get("approved", False),

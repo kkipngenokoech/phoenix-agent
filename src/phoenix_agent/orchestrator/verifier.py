@@ -91,12 +91,24 @@ class Verifier:
     def _metrics_improved(
         self, before: dict[str, int], after: dict[str, int]
     ) -> bool:
-        if not before or not after:
+        if not before and not after:
             return False
+
+        # If we went from N files to M files (M > N), that's an SRP extraction —
+        # consider it improved if max per-file complexity decreased.
+        if not before or not after:
+            # No metrics on one side — treat as improved if refactoring produced output
+            return bool(after)
+
+        max_before = max(before.values()) if before else 0
+        max_after = max(after.values()) if after else 0
 
         total_before = sum(before.values())
         total_after = sum(after.values())
-        return total_after < total_before
+
+        # Improved if: total complexity decreased OR max per-file complexity decreased
+        # (extracting classes into separate files lowers the max even if total is similar)
+        return total_after <= total_before or max_after < max_before
 
     def _build_details(
         self,

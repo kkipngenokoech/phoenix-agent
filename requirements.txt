@@ -1,16 +1,31 @@
-# Requirements for Streamlit Cloud deployment
+# Phoenix Agent - Python Dependencies
+# Install with: pip install -r requirements.txt
+# Or better: pip install -e ".[openai]"
+
+# LLM
 langchain>=0.1.0
-langchain-groq>=0.1.0
+langchain-anthropic>=0.1.0
 langchain-community>=0.0.20
-langchain-chroma>=0.1.0
-langchain-text-splitters>=0.0.1
-chromadb>=0.4.22
-sentence-transformers>=2.3.0
-tiktoken>=0.5.0
+langchain-openai>=0.1.0
 pydantic>=2.0.0
 python-dotenv>=1.0.0
-rich>=13.0.0
+
+# Memory
+redis>=5.0.0
+psycopg2-binary>=2.9
+neo4j>=5.0.0
+
+# Tools
 gitpython>=3.1.0
 radon>=6.0.0
-streamlit>=1.30.0
-httpx>=0.24.0
+pytest>=7.0.0
+pytest-json-report>=1.5.0
+pytest-cov>=4.0.0
+
+# CLI
+rich>=13.0.0
+
+# API
+fastapi>=0.100.0
+uvicorn[standard]>=0.22.0
+websockets>=11.0

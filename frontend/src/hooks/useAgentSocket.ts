@@ -9,12 +9,31 @@ export interface PhaseEvent {
     | "phase_update"
     | "completed"
     | "error"
-    | "review_requested";
+    | "review_requested"
+    | "approval_requested"
+    | "act_step"
+    | "heartbeat";
   session_id: string;
   iteration: number;
   phase: string | null;
   data: Record<string, unknown> | null;
   message?: string;
+}
+
+export interface ActStepEvent {
+  status: "running" | "success" | "failed";
+  step_id: number;
+  total_steps: number;
+  action: string;
+  description?: string;
+  target_file?: string;
+  error?: string;
+}
+
+export interface IterationState {
+  iteration: number;
+  events: PhaseEvent[];
+  currentPhase: string | null;
 }
 
 export type ConnectionStatus =
@@ -25,14 +44,14 @@ export type ConnectionStatus =
   | "reviewing";
 
 export function useAgentSocket(sessionId: string | null) {
-  const [events, setEvents] = useState<PhaseEvent[]>([]);
+  const [iterations, setIterations] = useState<IterationState[]>([]);
   const [status, setStatus] = useState<ConnectionStatus>("disconnected");
-  const [currentPhase, setCurrentPhase] = useState<string | null>(null);
-  const [iteration, setIteration] = useState(0);
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
   const [reviewPayload, setReviewPayload] = useState<ReviewPayload | null>(
     null
   );
+  const [approvalData, setApprovalData] = useState<Record<string, unknown> | null>(null);
+  const [actStep, setActStep] = useState<ActStepEvent | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const statusRef = useRef<ConnectionStatus>("disconnected");
   const retriesRef = useRef(0);
@@ -57,18 +76,52 @@ export function useAgentSocket(sessionId: string | null) {
 
     ws.onmessage = (msg) => {
       try {
-        const event = JSON.parse(msg.data);
+        const event = JSON.parse(msg.data) as PhaseEvent;
 
         // Ignore server heartbeats (keepalive pings)
         if (event.type === "heartbeat") return;
 
-        setEvents((prev) => [...prev, event as PhaseEvent]);
+        setIterations((prev) => {
+          const newIterations = [...prev];
+          let iterationState = newIterations.find(
+            (iter) => iter.iteration === event.iteration
+          );
 
-        if (event.type === "iteration_start") {
-          setIteration(event.iteration);
-        } else if (event.type === "phase_update" && event.phase) {
-          setCurrentPhase(event.phase);
+          if (!iterationState) {
+            iterationState = {
+              iteration: event.iteration,
+              events: [],
+              currentPhase: null,
+            };
+            newIterations.push(iterationState);
+            newIterations.sort((a, b) => a.iteration - b.iteration);
+          }
+
+          iterationState.events.push(event);
+
+          if (event.type === "phase_update" && event.phase) {
+            iterationState.currentPhase = event.phase;
+          }
+          
+          return newIterations;
+        });
+
+        if (event.type === "act_step") {
+          setActStep(event.data as unknown as ActStepEvent);
+        } else if (event.type === "approval_requested") {
+          setApprovalData(event.data);
+          setStatus("reviewing");
+          statusRef.current = "reviewing";
+        } else if (event.type === "phase_update") {
+          // Agent moved to a new phase — clear transient UI states
+          setApprovalData(null);
+          setActStep(null);
+          if (statusRef.current === "reviewing") {
+            setStatus("connected");
+            statusRef.current = "connected";
+          }
         } else if (event.type === "review_requested") {
+          setApprovalData(null);
           setReviewPayload(event.data as unknown as ReviewPayload);
           setStatus("reviewing");
           statusRef.current = "reviewing";
@@ -109,13 +162,19 @@ export function useAgentSocket(sessionId: string | null) {
     };
   }, [sessionId]);
 
+  const allEvents = iterations.flatMap((iter) => iter.events);
+
+  // Track whether we've already seen a review event (stable ref, no re-renders)
+  const hasSeenReviewRef = useRef(false);
+  if (allEvents.some((e) => e.type === "review_requested")) {
+    hasSeenReviewRef.current = true;
+  }
+
   // Reconnect recovery: if we reconnect but the session is in review state,
-  // fetch the review payload via REST
+  // fetch the review payload via REST (runs only on status change)
   useEffect(() => {
     if (!sessionId || reviewPayload || status !== "connected") return;
-
-    const hasReviewEvent = events.some((e) => e.type === "review_requested");
-    if (!hasReviewEvent) return;
+    if (!hasSeenReviewRef.current) return;
 
     getReview(sessionId)
       .then((payload) => {
@@ -126,7 +185,7 @@ export function useAgentSocket(sessionId: string | null) {
       .catch(() => {
         // Review may have been resolved already
       });
-  }, [sessionId, status, events, reviewPayload]);
+  }, [sessionId, status, reviewPayload]);
 
   useEffect(() => {
     if (sessionId) connect();
@@ -137,5 +196,5 @@ export function useAgentSocket(sessionId: string | null) {
     };
   }, [sessionId, connect]);
 
-  return { events, status, currentPhase, iteration, result, reviewPayload };
+  return { iterations, status, result, reviewPayload, approvalData, actStep, allEvents };
 }

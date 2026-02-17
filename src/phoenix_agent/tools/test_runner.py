@@ -155,8 +155,11 @@ class TestRunnerTool(BaseTool):
             cmd.extend(test_paths)
         else:
             tests_dir = project / "tests"
+            sample_project_dir = project / "sample_project"
             if tests_dir.exists():
                 cmd.append("tests/")
+            elif sample_project_dir.exists():
+                cmd.append("sample_project/")
 
         return cmd
 

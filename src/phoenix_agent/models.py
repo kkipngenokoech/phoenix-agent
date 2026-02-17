@@ -105,6 +105,8 @@ class SessionState(BaseModel):
     branch_name: Optional[str] = None
     pr_url: Optional[str] = None
     error_message: Optional[str] = None
+    last_test_failure: Optional[TestResult] = None
+
 
 
 # ---------------------------------------------------------------------------

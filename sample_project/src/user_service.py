@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 class Database:
     def __init__(self):
         self.data = {}
+        self.session_tokens = {}
 
     def get(self, key):
         return self.data.get(key)
@@ -256,24 +257,13 @@ class AuthService:
         # Send email notification
         pass  # Implementation not provided
 
-    def _save_to_disk(self):
-        try:
-            safe_data = {}
-            for k, v in self.db.data.items():
-                safe_data[k] = {dk: dv for dk, dv in v.items()}
-            with open("users.json", "w") as f:
-                json.dump(safe_data, f, indent=2, default=str)
-        except Exception:
-            pass  # Silently fail - bad practice
 
-
-class UserService:
-    def __init__(self, db_path=None, smtp_host=None, smtp_port=587):
-        self.auth_service = AuthService(db_path, smtp_host, smtp_port)
+class UserServiceImpl:
+    def __init__(self, auth_service):
+        self.auth_service = auth_service
         self.max_login_attempts = 5
         self.password_min_length = 8
         self.token_expiry_hours = 24
-        self.session_tokens = {}
 
     def authenticate(self, username, password):
         return self.auth_service.authenticate(username, password)
@@ -295,3 +285,13 @@ class UserService:
 
     def delete_user(self, username):
         return self.auth_service.delete_user(username)
+
+
+class Application:
+    def __init__(self):
+        self.auth_service = AuthService()
+        self.user_service = UserServiceImpl(self.auth_service)
+        self.notification_service = NotificationService()
+
+if __name__ == "__main__":
+    app = Application()

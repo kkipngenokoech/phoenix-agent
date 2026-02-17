@@ -4,10 +4,18 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { InputType, RefactorRequest, startRefactor } from "@/lib/api";
 import InputTabs from "./InputTabs";
+import { Textarea } from "@/components/ui/textarea";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Loader2 } from "lucide-react";
 
-export default function RefactorForm() {
+interface RefactorFormProps {
+  defaultInputType?: InputType;
+}
+
+export default function RefactorForm({ defaultInputType = "local_path" }: RefactorFormProps) {
   const router = useRouter();
-  const [inputType, setInputType] = useState<InputType>("local_path");
+  const [inputType, setInputType] = useState<InputType>(defaultInputType);
   const [targetPath, setTargetPath] = useState("./sample_project");
   const [pastedCode, setPastedCode] = useState("");
   const [githubUrl, setGithubUrl] = useState("");
@@ -42,7 +50,7 @@ export default function RefactorForm() {
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
+    <form onSubmit={handleSubmit} className="space-y-6">
       <InputTabs
         inputType={inputType}
         onInputTypeChange={setInputType}
@@ -54,31 +62,41 @@ export default function RefactorForm() {
         onGithubUrlChange={setGithubUrl}
       />
 
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">
-          Refactoring Request
-        </label>
-        <textarea
+      <div className="space-y-2">
+        <Label htmlFor="request-input">Refactoring Request</Label>
+        <Textarea
+          id="request-input"
           value={request}
           onChange={(e) => setRequest(e.target.value)}
           rows={4}
-          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-orange-400 focus:border-orange-400 outline-none resize-y"
+          placeholder="e.g., Refactor the User service to use the repository pattern..."
         />
       </div>
 
       {error && (
-        <div className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">
-          {error}
+        <div className="text-sm text-destructive bg-destructive/10 rounded-lg px-4 py-3">
+          <span className="font-medium">Error:</span> {error}
         </div>
       )}
 
-      <button
-        type="submit"
-        disabled={loading}
-        className="w-full bg-gradient-to-r from-orange-500 to-yellow-500 text-white font-medium rounded-lg px-4 py-2.5 hover:from-orange-600 hover:to-yellow-600 disabled:opacity-50 disabled:cursor-not-allowed transition"
-      >
-        {loading ? "Starting..." : "Start Refactoring"}
-      </button>
+      <div className="pt-2">
+        <Button
+          type="submit"
+          disabled={loading}
+          variant="phoenix"
+          className="w-full"
+          size="lg"
+        >
+          {loading ? (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              Starting Session...
+            </>
+          ) : (
+            "Start Refactoring"
+          )}
+        </Button>
+      </div>
     </form>
   );
 }

@@ -41,15 +41,20 @@ def create_llm(config: PhoenixConfig):
 
     elif provider == "openai":
         from langchain_openai import ChatOpenAI
-        api_key = os.getenv("OPENAI_API_KEY")
+        api_key = config.llm.api_key or os.getenv("OPENAI_API_KEY")
         if not api_key:
-            raise ValueError("OPENAI_API_KEY not set")
-        logger.info(f"Using OpenAI: {model}")
-        return ChatOpenAI(
+            raise ValueError("OPENAI_API_KEY or LLM_API_KEY not set")
+        base_url = config.llm.base_url
+        logger.info(f"Using OpenAI-compatible: {model} at {base_url or 'default'}")
+        kwargs = dict(
             model=model,
+            api_key=api_key,
             temperature=temperature,
             max_tokens=max_tokens,
         )
+        if base_url:
+            kwargs["base_url"] = base_url
+        return ChatOpenAI(**kwargs)
 
     elif provider == "groq":
         from langchain_groq import ChatGroq
@@ -74,6 +79,20 @@ def create_llm(config: PhoenixConfig):
             model=model,
             base_url=base_url,
             temperature=temperature,
+        )
+
+    elif provider == "google":
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        api_key = config.llm.api_key or os.getenv("GOOGLE_API_KEY")
+        if not api_key:
+            raise ValueError("GOOGLE_API_KEY not set")
+        logger.info(f"Using Google: {model}")
+        return ChatGoogleGenerativeAI(
+            model=model,
+            google_api_key=api_key,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            convert_system_message_to_human=True, # Gemini often prefers system messages as human
         )
 
     elif provider == "auto":

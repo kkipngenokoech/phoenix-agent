@@ -6,6 +6,7 @@ import logging
 import time
 from datetime import datetime
 
+from phoenix_agent.config import PhoenixConfig
 from phoenix_agent.models import (
     AgentPhase,
     ASTAnalysisResult,
@@ -31,12 +32,14 @@ logger = logging.getLogger(__name__)
 class Updater:
     def __init__(
         self,
+        config: PhoenixConfig,
         session_memory: SessionMemory,
         history: RefactoringHistory,
         graph: CodebaseGraph,
         git_ops: GitOperationsTool,
         ast_parser: ASTParserTool,
     ) -> None:
+        self.config = config
         self._session = session_memory
         self._history = history
         self._graph = graph
@@ -86,55 +89,58 @@ class Updater:
         repo_path = session.target_path
         branch_name = f"phoenix/refactor-{session.session_id}"
 
-        # 1. Create branch
-        try:
-            branch_result = self._git_ops.execute(
-                operation="create_branch",
-                repository_path=repo_path,
-                parameters={"branch_name": branch_name, "base_branch": "main"},
-            )
-            if branch_result.success:
-                session.branch_name = branch_name
-            logger.info(f"UPDATE: branch create → {branch_result.success}")
-        except Exception as e:
-            logger.warning(f"UPDATE: branch creation failed: {e}")
+        if not self.config.agent.skip_git_operations:
+            # 1. Create branch
+            try:
+                branch_result = self._git_ops.execute(
+                    operation="create_branch",
+                    repository_path=repo_path,
+                    parameters={"branch_name": branch_name, "base_branch": "main"},
+                )
+                if branch_result.success:
+                    session.branch_name = branch_name
+                logger.info(f"UPDATE: branch create → {branch_result.success}")
+            except Exception as e:
+                logger.warning(f"UPDATE: branch creation failed: {e}")
 
-        # 2. Commit changes
-        try:
-            commit_msg = (
-                f"refactor: {session.goal.description}\n\n"
-                f"Session: {session.session_id}\n"
-                f"Complexity: {report.complexity_before} → {report.complexity_after}\n"
-                f"Tests: {'passing' if report.tests_passed else 'failing'}"
-            )
-            commit_result = self._git_ops.execute(
-                operation="commit",
-                repository_path=repo_path,
-                parameters={"commit_message": commit_msg},
-            )
-            logger.info(f"UPDATE: commit → {commit_result.success}")
-        except Exception as e:
-            logger.warning(f"UPDATE: commit failed: {e}")
+            # 2. Commit changes
+            try:
+                commit_msg = (
+                    f"refactor: {session.goal.description}\n\n"
+                    f"Session: {session.session_id}\n"
+                    f"Complexity: {report.complexity_before} → {report.complexity_after}\n"
+                    f"Tests: {'passing' if report.tests_passed else 'failing'}"
+                )
+                commit_result = self._git_ops.execute(
+                    operation="commit",
+                    repository_path=repo_path,
+                    parameters={"commit_message": commit_msg},
+                )
+                logger.info(f"UPDATE: commit → {commit_result.success}")
+            except Exception as e:
+                logger.warning(f"UPDATE: commit failed: {e}")
 
-        # 3. Create PR (skipped automatically for repos without a remote)
-        try:
-            pr_description = self._build_pr_description(session, report)
-            pr_result = self._git_ops.execute(
-                operation="create_pr",
-                repository_path=repo_path,
-                parameters={
-                    "title": f"Refactor: {session.goal.description[:60]}",
-                    "description": pr_description,
-                    "source_branch": branch_name,
-                    "target_branch": "main",
-                    "labels": ["refactoring", "phoenix-agent"],
-                },
-            )
-            if pr_result.success and pr_result.output:
-                session.pr_url = pr_result.output.get("result", {}).get("pr_url")
-            logger.info(f"UPDATE: PR create → {pr_result.success} (url={session.pr_url})")
-        except Exception as e:
-            logger.warning(f"UPDATE: PR creation failed: {e}")
+            # 3. Create PR (skipped automatically for repos without a remote)
+            try:
+                pr_description = self._build_pr_description(session, report)
+                pr_result = self._git_ops.execute(
+                    operation="create_pr",
+                    repository_path=repo_path,
+                    parameters={
+                        "title": f"Refactor: {session.goal.description[:60]}",
+                        "description": pr_description,
+                        "source_branch": branch_name,
+                        "target_branch": "main",
+                        "labels": ["refactoring", "phoenix-agent"],
+                    },
+                )
+                if pr_result.success and pr_result.output:
+                    session.pr_url = pr_result.output.get("result", {}).get("pr_url")
+                logger.info(f"UPDATE: PR create → {pr_result.success} (url={session.pr_url})")
+            except Exception as e:
+                logger.warning(f"UPDATE: PR creation failed: {e}")
+        else:
+            logger.info("UPDATE: skipping git operations as configured")
 
         # 4. Write to long-term memory (PostgreSQL)
         duration = time.time() - start_time
@@ -174,7 +180,9 @@ class Updater:
 
         # Read refactored files so the frontend can display them
         # (especially important for pasted code where files live in a temp dir)
-        refactored_files = self._read_refactored_files(repo_path)
+        refactored_files = self._read_refactored_files(
+            repo_path, list(report.complexity_after.keys())
+        )
 
         return {
             "status": "success",
@@ -248,19 +256,24 @@ class Updater:
         return "\n".join(lines)
 
     @staticmethod
-    def _read_refactored_files(repo_path: str) -> dict[str, str]:
-        """Read all Python files from the target directory for the result payload."""
+    def _read_refactored_files(repo_path: str, modified_files: list[str]) -> dict[str, str]:
+        """Read specified files from the target directory for the result payload."""
         from pathlib import Path
 
         files: dict[str, str] = {}
         root = Path(repo_path)
-        for py_file in sorted(root.rglob("*.py")):
-            if "__pycache__" in str(py_file):
-                continue
+        for file_path in modified_files:
             try:
-                rel = str(py_file.relative_to(root))
-                content = py_file.read_text()
-                files[rel] = content
+                p = Path(file_path)
+                # Ensure the path is within the project root for security
+                if not p.is_absolute():
+                    p = root / p
+                
+                # Check if file exists before reading
+                if p.exists() and p.is_relative_to(root):
+                    rel = str(p.relative_to(root))
+                    content = p.read_text()
+                    files[rel] = content
             except Exception:
                 pass
         return files

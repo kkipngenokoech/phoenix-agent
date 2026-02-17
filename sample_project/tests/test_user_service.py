@@ -1,92 +1,168 @@
-"""Tests for UserService."""
-
 import pytest
-from src.user_service import UserService, DATABASE, EMAIL_LOG
-
-
-@pytest.fixture(autouse=True)
-def clean_db():
-    """Reset the in-memory database before each test."""
-    DATABASE.clear()
-    EMAIL_LOG.clear()
-    yield
-    DATABASE.clear()
-    EMAIL_LOG.clear()
+from application import Application, AuthService, UserServiceImpl, Database, EmailLog, NotificationService
 
 
 @pytest.fixture
-def service():
-    return UserService()
+def auth_service():
+    return Application().auth_service
 
 
-class TestAuthentication:
-    def test_create_and_authenticate(self, service):
-        result = service.create_user("alice", "alice@example.com", "Pass123!@", 25)
+@pytest.fixture
+def user_service(auth_service):
+    return Application().user_service
+
+
+@pytest.fixture
+def notification_service():
+    return Application().notification_service
+
+
+class TestAuthService:
+    def test_authenticate_valid_credentials(self, auth_service):
+        token = auth_service.authenticate("test_user", "password")
+        assert token
+
+    def test_authenticate_invalid_password(self, auth_service):
+        with pytest.raises(Exception):
+            auth_service.authenticate("test_user", "wrong_password")
+
+    def test_validate_token_valid_token(self, auth_service, user_service):
+        token = user_service.authenticate("test_user", "password")
+        assert user_service.validate_token(token)
+
+    def test_validate_token_invalid_token(self, auth_service, user_service):
+        with pytest.raises(Exception):
+            user_service.validate_token("invalid_token")
+
+    def test_logout_valid_token(self, auth_service, user_service):
+        token = user_service.authenticate("test_user", "password")
+        assert user_service.logout(token)
+
+    def test_logout_invalid_token(self, auth_service, user_service):
+        with pytest.raises(Exception):
+            user_service.logout("invalid_token")
+
+
+class TestUserService:
+    def test_create_user_valid_credentials(self, user_service):
+        result = user_service.create_user("test_user", "password", 25)
         assert result["success"] is True
 
-        token = service.authenticate("alice", "Pass123!@")
-        assert token is not None
-        assert service.validate_token(token)
+    def test_create_user_invalid_password(self, user_service):
+        with pytest.raises(Exception):
+            user_service.create_user("test_user", "wrong_password", 25)
 
-    def test_authenticate_wrong_password(self, service):
-        service.create_user("bob", "bob@example.com", "Secure99!!", 30)
-        token = service.authenticate("bob", "wrongpassword")
-        assert token is None
+    def test_get_user_valid_username(self, auth_service, user_service):
+        token = user_service.authenticate("test_user", "password")
+        result = user_service.get_user(token)
+        assert result
 
-    def test_authenticate_nonexistent_user(self, service):
-        token = service.authenticate("ghost", "password")
-        assert token is None
+    def test_get_user_invalid_username(self, auth_service, user_service):
+        with pytest.raises(Exception):
+            user_service.get_user("invalid_token")
 
-    def test_logout(self, service):
-        service.create_user("carol", "carol@example.com", "MyPass1!!", 28)
-        token = service.authenticate("carol", "MyPass1!!")
-        assert token is not None
-        assert service.logout(token) is True
-        assert service.validate_token(token) is False
-
-
-class TestValidation:
-    def test_valid_user_data(self, service):
-        errors = service.validate_user_data("newuser", "new@example.com", "Strong1!!", 25)
-        assert errors == []
-
-    def test_short_username(self, service):
-        errors = service.validate_user_data("ab", "a@b.com", "Strong1!!", 25)
-        assert any("at least 3" in e for e in errors)
-
-    def test_invalid_email(self, service):
-        errors = service.validate_user_data("user1", "notanemail", "Strong1!!", 25)
-        assert any("email" in e.lower() for e in errors)
-
-    def test_weak_password(self, service):
-        errors = service.validate_user_data("user2", "u@b.com", "short", 25)
-        assert len(errors) > 0
-
-    def test_invalid_age(self, service):
-        errors = service.validate_user_data("user3", "u@b.com", "Strong1!!", 5)
-        assert any("age" in e.lower() for e in errors)
-
-
-class TestPersistence:
-    def test_create_user(self, service):
-        result = service.create_user("dave", "dave@example.com", "DavePass1!", 35)
+    def test_update_user_valid_username(self, auth_service, user_service):
+        token = user_service.authenticate("test_user", "password")
+        result = user_service.update_user(token, email="new_email@example.com")
         assert result["success"] is True
-        assert "dave" in DATABASE
 
-    def test_get_user(self, service):
-        service.create_user("eve", "eve@example.com", "EvePass1!!", 22)
-        user = service.get_user("eve")
-        assert user is not None
-        assert user["username"] == "eve"
-        assert "password_hash" not in user  # Should be filtered
+    def test_update_user_invalid_username(self, auth_service, user_service):
+        with pytest.raises(Exception):
+            user_service.update_user("invalid_token", email="new_email@example.com")
 
-    def test_update_user(self, service):
-        service.create_user("frank", "frank@example.com", "FrankP1!!", 40)
-        result = service.update_user("frank", email="frank2@example.com")
+    def test_delete_user_valid_username(self, auth_service, user_service):
+        token = user_service.authenticate("test_user", "password")
+        result = user_service.delete_user(token)
+        assert result
+
+    def test_delete_user_invalid_username(self, auth_service, user_service):
+        with pytest.raises(Exception):
+            user_service.delete_user("invalid_token")
+
+
+class TestDatabase:
+    def test_save_to_disk_valid_data(self, Database):
+        data = {"key": "value"}
+        db = Database()
+        db.save_to_disk("test.json")
+        assert os.path.exists("test.json")
+
+    def test_save_to_disk_invalid_data(self, Database):
+        with pytest.raises(Exception):
+            Database().save_to_disk("invalid.json")
+
+
+class TestEmailLog:
+    def test_append_record_valid_record(self, EmailLog):
+        record = {"to": "test@example.com"}
+        email_log = EmailLog()
+        email_log.append(record)
+        assert len(email_log.records) == 1
+
+    def test_get_history_valid_username(self, EmailLog):
+        record = {"to": "test@example.com"}
+        email_log = EmailLog()
+        email_log.append(record)
+        result = email_log.get_history("test@example.com")
+        assert len(result) == 1
+
+    def test_get_history_invalid_username(self, EmailLog):
+        with pytest.raises(Exception):
+            EmailLog().get_history("invalid_email")
+
+
+class TestNotificationService:
+    def test_send_notification_valid_subject_and_body(self, NotificationService):
+        notification_service = NotificationService()
+        result = notification_service.send_notification("test@example.com", "Test Subject", "Test Body")
+        assert result
+
+    def test_send_notification_invalid_subject_or_body(self, NotificationService):
+        with pytest.raises(Exception):
+            NotificationService().send_notification("test@example.com", "", "")
+
+
+class TestApplication:
+    def test_create_auth_service_valid_credentials(self, Application):
+        auth_service = Application().auth_service
+        token = auth_service.authenticate("test_user", "password")
+        assert token
+
+    def test_create_auth_service_invalid_password(self, Application):
+        with pytest.raises(Exception):
+            Application().auth_service.authenticate("test_user", "wrong_password")
+
+    def test_create_user_service_valid_credentials(self, user_service):
+        result = user_service.create_user("test_user", "password", 25)
         assert result["success"] is True
-        assert DATABASE["frank"]["email"] == "frank2@example.com"
 
-    def test_delete_user(self, service):
-        service.create_user("grace", "grace@example.com", "GraceP1!!", 33)
-        assert service.delete_user("grace") is True
-        assert "grace" not in DATABASE
+    def test_create_user_service_invalid_password(self, user_service):
+        with pytest.raises(Exception):
+            user_service.create_user("test_user", "wrong_password", 25)
+
+    def test_get_user_service_valid_username(self, auth_service, user_service):
+        token = user_service.authenticate("test_user", "password")
+        result = user_service.get_user(token)
+        assert result
+
+    def test_get_user_service_invalid_username(self, auth_service, user_service):
+        with pytest.raises(Exception):
+            user_service.get_user("invalid_token")
+
+    def test_update_user_service_valid_username(self, auth_service, user_service):
+        token = user_service.authenticate("test_user", "password")
+        result = user_service.update_user(token, email="new_email@example.com")
+        assert result["success"] is True
+
+    def test_update_user_service_invalid_username(self, auth_service, user_service):
+        with pytest.raises(Exception):
+            user_service.update_user("invalid_token", email="new_email@example.com")
+
+    def test_delete_user_service_valid_username(self, auth_service, user_service):
+        token = user_service.authenticate("test_user", "password")
+        result = user_service.delete_user(token)
+        assert result
+
+    def test_delete_user_service_invalid_username(self, auth_service, user_service):
+        with pytest.raises(Exception):
+            user_service.delete_user("invalid_token")

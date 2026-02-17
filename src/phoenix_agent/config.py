@@ -13,12 +13,12 @@ load_dotenv()
 
 
 class LLMConfig(BaseModel):
-    provider: str = Field(default_factory=lambda: os.getenv("LLM_PROVIDER", "anthropic"))
-    model: str = Field(default_factory=lambda: os.getenv("LLM_MODEL", "claude-sonnet-4-5-20250929"))
-    temperature: float = 0.0
-    max_tokens: int = 4096
-    base_url: Optional[str] = Field(default_factory=lambda: os.getenv("LLM_BASE_URL"))
-    api_key: Optional[str] = Field(default_factory=lambda: os.getenv("ANTHROPIC_API_KEY"))
+    provider: str = Field(default_factory=lambda: os.getenv("LLM_PROVIDER", "openai"))
+    model: str = Field(default_factory=lambda: os.getenv("LLM_MODEL", "claude-sonnet-4-20250514-v1:0"))
+    temperature: float = 0.2
+    max_tokens: int = 8192
+    base_url: Optional[str] = Field(default_factory=lambda: os.getenv("LLM_BASE_URL", "https://ai-gateway.andrew.cmu.edu/"))
+    api_key: Optional[str] = Field(default_factory=lambda: os.getenv("LLM_API_KEY") or os.getenv("ANTHROPIC_API_KEY"))
 
 
 class RedisConfig(BaseModel):
@@ -49,6 +49,8 @@ class AgentConfig(BaseModel):
     high_risk_threshold: float = 7.0
     medium_risk_threshold: float = 4.0
     review_timeout: int = 3600  # 1 hour for user to approve/reject diffs
+    skip_git_operations: bool = False
+    max_coder_agents: int = 4  # Max parallel CoderAgents in crew mode
 
 
 class PhoenixConfig(BaseModel):

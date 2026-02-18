@@ -1,0 +1,65 @@
+# DigitalOcean App Platform Spec
+# Deploy: doctl apps create --spec .do/app.yaml
+# Docs: https://docs.digitalocean.com/products/app-platform/reference/app-spec/
+
+name: phoenix-agent
+
+services:
+  - name: phoenix-api
+    github:
+      repo: kkipngenokoech/phoenix-agent
+      branch: main
+      deploy_on_push: true
+    dockerfile_path: Dockerfile
+    http_port: 8000
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    health_check:
+      http_path: /health
+    envs:
+      - key: LLM_PROVIDER
+        value: anthropic
+      - key: LLM_MODEL
+        value: claude-sonnet-4-20250514
+      - key: ANTHROPIC_API_KEY
+        type: SECRET
+        value: REPLACE_ME
+      - key: SKIP_GIT_OPERATIONS
+        value: "true"
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        value: ${db.DATABASE_URL}
+      - key: REDIS_URL
+        scope: RUN_TIME
+        value: ${redis.DATABASE_URL}
+      - key: CORS_ORIGIN
+        scope: RUN_TIME
+        value: ${phoenix-frontend.PUBLIC_URL}
+
+  - name: phoenix-frontend
+    github:
+      repo: kkipngenokoech/phoenix-agent
+      branch: main
+      deploy_on_push: true
+    dockerfile_path: frontend/Dockerfile
+    http_port: 3000
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    build_command: ""
+    envs:
+      - key: NEXT_PUBLIC_API_URL
+        scope: BUILD_TIME
+        value: ${phoenix-api.PUBLIC_URL}
+
+databases:
+  - name: db
+    engine: PG
+    version: "16"
+    size: db-s-dev-database
+    num_nodes: 1
+
+  - name: redis
+    engine: REDIS
+    version: "7"
+    size: db-s-dev-database
+    num_nodes: 1

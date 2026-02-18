@@ -1,0 +1,32 @@
+# Render Blueprint — deploy with "render blueprint apply"
+# https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: phoenix-agent-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    envVars:
+      - key: LLM_PROVIDER
+        value: anthropic
+      - key: LLM_MODEL
+        value: claude-sonnet-4-20250514
+      - key: ANTHROPIC_API_KEY
+        sync: false  # Set manually in dashboard
+      - key: SKIP_GIT_OPERATIONS
+        value: "true"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: phoenix-db
+          property: connectionString
+      - key: REDIS_URL
+        value: ""  # Set to Upstash URL in dashboard
+    healthCheckPath: /health
+
+databases:
+  - name: phoenix-db
+    plan: free
+    databaseName: phoenix
+    user: phoenix
+    ipAllowList: []

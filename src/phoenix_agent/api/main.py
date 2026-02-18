@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,6 +16,26 @@ from phoenix_agent.memory.history import RefactoringHistory
 from phoenix_agent.memory.session import SessionMemory
 
 logger = logging.getLogger(__name__)
+
+_MIGRATIONS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "migrations"
+
+
+def _run_migrations(history: RefactoringHistory) -> None:
+    """Apply SQL migrations on startup if the DB connection is available."""
+    conn = history._conn
+    if not conn:
+        return
+    if not _MIGRATIONS_DIR.is_dir():
+        logger.info("No migrations directory found — skipping auto-migrate")
+        return
+    for sql_file in sorted(_MIGRATIONS_DIR.glob("*.sql")):
+        try:
+            sql = sql_file.read_text()
+            with conn.cursor() as cur:
+                cur.execute(sql)
+            logger.info(f"Migration applied: {sql_file.name}")
+        except Exception as e:
+            logger.warning(f"Migration {sql_file.name} skipped: {e}")
 
 
 @asynccontextmanager
@@ -27,6 +49,7 @@ async def lifespan(app: FastAPI):
     session_memory = SessionMemory(config)
     history = RefactoringHistory(config)
 
+    _run_migrations(history)
     init_shared_state(config, session_memory, history)
     logger.info("Phoenix API started")
 
@@ -42,8 +65,6 @@ app = FastAPI(
     version="0.2.0",
     lifespan=lifespan,
 )
-
-import os
 
 _cors_origins = [
     "http://localhost:3000",

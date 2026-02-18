@@ -1,314 +1,423 @@
-# Phoenix RAG
+# Phoenix Agent
 
-A Retrieval-Augmented Generation (RAG) system for code refactoring assistance. Phoenix helps developers identify code smells, suggests refactoring patterns, and provides best practices grounded in established software engineering principles.
+An autonomous multi-agent system for intelligent code refactoring. Phoenix Agent analyzes codebases, identifies code smells, generates refactoring plans, applies changes in parallel, and verifies correctness — all through a closed-loop control system with persistent memory.
 
-## Features
+**[Live Demo](https://phoenix-agent.vercel.app)** · **[Documentation](https://kipngenokoech.com/projects/phoenix-agent/)** · **[Backend API](https://monkfish-app-eo2ul.ondigitalocean.app/health)**
 
-- **Knowledge Retrieval**: Search a curated knowledge base of refactoring patterns, code smells, and best practices
-- **Code Analysis**: Analyze Python code for structural issues, complexity metrics, and code smells
-- **ReAct-Style Reasoning**: Agent uses a think-act-observe loop to gather information before responding
-- **Groundedness Verification**: Responses are verified against retrieved sources to reduce hallucination
-- **Hybrid Chunking**: Intelligent document chunking that preserves semantic meaning and code structure
-- **Multiple LLM Support**: Works with Ollama (local), Groq, Anthropic, and OpenAI
+---
+
+## Table of Contents
+
+- [Key Features](#key-features)
+- [Architecture](#architecture)
+- [Multi-Agent Crew System](#multi-agent-crew-system)
+- [7-Phase Control Loop](#7-phase-control-loop)
+- [Persistent State Management](#persistent-state-management)
+- [Evaluation Framework](#evaluation-framework)
+- [Project Structure](#project-structure)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Deployment](#deployment)
+- [Configuration](#configuration)
+- [API Reference](#api-reference)
+
+---
+
+## Key Features
+
+| Feature | Description |
+|---------|-------------|
+| **Multi-Agent Architecture** | Lead agent orchestrates specialized sub-agents (Analyzer, Strategist, Coder, Tester) with parallel execution |
+| **7-Phase Control Loop** | OBSERVE → REASON → PLAN → DECIDE → ACT → VERIFY → UPDATE with adaptive retry |
+| **3-Layer Memory** | Redis (session state) + PostgreSQL (refactoring history) + Neo4j (knowledge graph) |
+| **Parallel Code Generation** | Multiple CoderAgents modify files concurrently via ThreadPoolExecutor |
+| **Human-in-the-Loop** | Approval gate before code changes; review gate after verification |
+| **Real-Time Streaming** | WebSocket event stream powers a live phase stepper, terminal log, and diff viewer |
+| **GitHub-Style File Browser** | Original vs. refactored file comparison with syntax highlighting |
+| **Evaluation Metrics** | Cyclomatic complexity, maintainability index, code smell count, test pass rate, lines of code |
+| **Adaptive Control** | Closed-loop — verification failures trigger re-planning with error context |
+
+---
 
 ## Architecture
 
 ```
-phoenix-rag/
-├── src/phoenix_rag/
-│   ├── agent.py              # Main ReAct agent orchestrator
-│   ├── config.py             # Configuration management
-│   ├── retrieval/
-│   │   ├── module.py         # ChromaDB vector store integration
-│   │   ├── chunking.py       # Semantic and code-aware chunking
-│   │   └── ingestion.py      # Document ingestion pipeline
-│   ├── tools/
-│   │   ├── registry.py       # Tool management
-│   │   ├── code_analyzer.py  # Code smell detection
-│   │   ├── complexity_calculator.py  # Cyclomatic complexity metrics
-│   │   └── retrieval_tool.py # Knowledge base search
-│   └── verification/
-│       ├── groundedness.py   # Response verification
-│       └── self_evaluation.py # Self-correction
-├── data/documents/           # Knowledge base documents
-├── app.py                    # Streamlit web interface
-└── demo.py                   # CLI demonstration
+┌─────────────────────────────────────────────────────────┐
+│                     Next.js Frontend                     │
+│  RefactorForm → PhaseStepper → DiffReview → FileViewer  │
+└────────────────────────┬────────────────────────────────┘
+                         │ WebSocket + REST
+┌────────────────────────▼────────────────────────────────┐
+│                   FastAPI Backend                         │
+│  ┌──────────┐  ┌───────────┐  ┌───────────────────────┐ │
+│  │  Routes   │  │ WebSocket │  │   Agent Registry      │ │
+│  └──────────┘  └───────────┘  └───────────────────────┘ │
+│                         │                                │
+│  ┌──────────────────────▼───────────────────────────┐   │
+│  │              Lead Agent (Orchestrator)             │   │
+│  │  ┌──────────┐ ┌────────────┐ ┌────────────────┐  │   │
+│  │  │ Analyzer │ │ Strategist │ │ Coder (×N)     │  │   │
+│  │  │ OBS+RSN  │ │ PLAN+DEC   │ │ parallel ACT   │  │   │
+│  │  └──────────┘ └────────────┘ └────────────────┘  │   │
+│  │                               ┌────────────────┐  │   │
+│  │                               │    Tester       │  │   │
+│  │                               │    VERIFY       │  │   │
+│  │                               └────────────────┘  │   │
+│  └──────────────────────────────────────────────────┘   │
+│                         │                                │
+│  ┌──────────────────────▼───────────────────────────┐   │
+│  │               Memory Layer                        │   │
+│  │  Redis (session) │ PostgreSQL (history) │ Neo4j   │   │
+│  └──────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## Multi-Agent Crew System
+
+Phoenix uses a **crew-style multi-agent architecture** where a [Lead Agent](https://github.com/kkipngenokoech/phoenix-agent/blob/main/src/phoenix_agent/crew/lead_agent.py) orchestrates four specialized sub-agents:
+
+| Agent | Role | Source |
+|-------|------|--------|
+| **[AnalyzerAgent](https://github.com/kkipngenokoech/phoenix-agent/blob/main/src/phoenix_agent/crew/analyzer_agent.py)** | Runs OBSERVE + REASON phases — parses the codebase with AST tools, identifies code smells, computes complexity metrics | [`crew/analyzer_agent.py`](https://github.com/kkipngenokoech/phoenix-agent/blob/main/src/phoenix_agent/crew/analyzer_agent.py) |
+| **[StrategistAgent](https://github.com/kkipngenokoech/phoenix-agent/blob/main/src/phoenix_agent/crew/strategist_agent.py)** | Runs PLAN + DECIDE phases — generates a step-by-step refactoring plan, evaluates risk, and decides execution order | [`crew/strategist_agent.py`](https://github.com/kkipngenokoech/phoenix-agent/blob/main/src/phoenix_agent/crew/strategist_agent.py) |
+| **[CoderAgent](https://github.com/kkipngenokoech/phoenix-agent/blob/main/src/phoenix_agent/crew/coder_agent.py)** | Runs ACT phase — each instance gets its own LLM and modifies a single file. Multiple CoderAgents run **in parallel** via `ThreadPoolExecutor` | [`crew/coder_agent.py`](https://github.com/kkipngenokoech/phoenix-agent/blob/main/src/phoenix_agent/crew/coder_agent.py) |
+| **[TesterAgent](https://github.com/kkipngenokoech/phoenix-agent/blob/main/src/phoenix_agent/crew/tester_agent.py)** | Runs VERIFY phase — executes the test suite, compares before/after metrics, produces a verification report | [`crew/tester_agent.py`](https://github.com/kkipngenokoech/phoenix-agent/blob/main/src/phoenix_agent/crew/tester_agent.py) |
+
+The base abstraction is defined in [`crew/base_agent.py`](https://github.com/kkipngenokoech/phoenix-agent/blob/main/src/phoenix_agent/crew/base_agent.py), and task/result types in [`crew/task.py`](https://github.com/kkipngenokoech/phoenix-agent/blob/main/src/phoenix_agent/crew/task.py).
+
+### Parallel Execution
+
+The Lead Agent submits independent `modify_code` steps to a `ThreadPoolExecutor`. Each CoderAgent gets its own LLM instance (thread-safe), and each writes to a different file — eliminating write conflicts:
+
+```python
+# From lead_agent.py — parallel coding
+with ThreadPoolExecutor(max_workers=config.max_coder_agents) as pool:
+    futures = {
+        pool.submit(coder.execute, task): task
+        for task in coding_tasks
+    }
+    for future in as_completed(futures):
+        result = future.result()  # TaskResult
+```
+
+---
+
+## 7-Phase Control Loop
+
+Each refactoring iteration follows a strict seven-phase loop, implemented across the [orchestrator modules](https://github.com/kkipngenokoech/phoenix-agent/tree/main/src/phoenix_agent/orchestrator):
+
+| Phase | Module | Description |
+|-------|--------|-------------|
+| **OBSERVE** | [`observer.py`](https://github.com/kkipngenokoech/phoenix-agent/blob/main/src/phoenix_agent/orchestrator/observer.py) | AST parsing, code smell detection, complexity metrics, test execution |
+| **REASON** | [`reasoner.py`](https://github.com/kkipngenokoech/phoenix-agent/blob/main/src/phoenix_agent/orchestrator/reasoner.py) | LLM analyzes observations, identifies root causes, prioritizes issues |
+| **PLAN** | [`planner.py`](https://github.com/kkipngenokoech/phoenix-agent/blob/main/src/phoenix_agent/orchestrator/planner.py) | Generates ordered refactoring steps with file paths and descriptions |
+| **DECIDE** | [`arbiter.py`](https://github.com/kkipngenokoech/phoenix-agent/blob/main/src/phoenix_agent/orchestrator/arbiter.py) | Risk assessment, confidence scoring, go/no-go decision |
+| **ACT** | [`executor.py`](https://github.com/kkipngenokoech/phoenix-agent/blob/main/src/phoenix_agent/orchestrator/executor.py) | LLM generates code, writes modified files (parallelized in crew mode) |
+| **VERIFY** | [`verifier.py`](https://github.com/kkipngenokoech/phoenix-agent/blob/main/src/phoenix_agent/orchestrator/verifier.py) | Re-runs tests, re-computes metrics, compares before/after |
+| **UPDATE** | [`updater.py`](https://github.com/kkipngenokoech/phoenix-agent/blob/main/src/phoenix_agent/orchestrator/updater.py) | Persists results to PostgreSQL, updates session state, optionally commits via git |
+
+### Adaptive Control (Closed-Loop)
+
+If verification **fails** (tests break or metrics regress), the agent:
+1. Reverts changes to the last known-good state
+2. Feeds the failure report back as context for the next iteration
+3. Re-plans with awareness of what went wrong
+4. Retries up to `max_iterations` (default: 3)
+
+This closed-loop ensures the agent converges on correct refactorings rather than blindly applying changes.
+
+---
+
+## Persistent State Management
+
+Phoenix uses a **3-layer memory architecture** to maintain state across phases, sessions, and projects:
+
+| Layer | Technology | Purpose | Source |
+|-------|-----------|---------|--------|
+| **Session Memory** | Redis (24hr TTL) | Current session state, phase data, WebSocket event queues | [`memory/session.py`](https://github.com/kkipngenokoech/phoenix-agent/blob/main/src/phoenix_agent/memory/session.py) |
+| **History Store** | PostgreSQL | Complete refactoring records — plans, metrics, original/refactored file contents, durations | [`memory/history.py`](https://github.com/kkipngenokoech/phoenix-agent/blob/main/src/phoenix_agent/memory/history.py) |
+| **Knowledge Graph** | Neo4j | Codebase relationships — functions, classes, dependencies, call graphs | [`memory/knowledge_graph.py`](https://github.com/kkipngenokoech/phoenix-agent/blob/main/src/phoenix_agent/memory/knowledge_graph.py) |
+
+### Schema (PostgreSQL)
+
+The `refactoring_history` table stores:
+- Session metadata (ID, timestamp, duration, status)
+- The full refactoring plan (JSONB)
+- Before/after metrics (JSONB) — complexity, maintainability, smell count
+- Original file contents and refactored file contents (JSONB)
+- Verification reports
+
+---
+
+## Evaluation Framework
+
+Phoenix computes **5 quantitative metrics** before and after each refactoring:
+
+| Metric | Description | Tool |
+|--------|-------------|------|
+| **Cyclomatic Complexity** | Number of independent code paths | [`ast_parser.py`](https://github.com/kkipngenokoech/phoenix-agent/blob/main/src/phoenix_agent/tools/ast_parser.py) |
+| **Maintainability Index** | Composite score (0–100) based on Halstead volume, cyclomatic complexity, and LOC | [`ast_parser.py`](https://github.com/kkipngenokoech/phoenix-agent/blob/main/src/phoenix_agent/tools/ast_parser.py) |
+| **Code Smell Count** | Number of detected smells (long methods, god classes, deep nesting, etc.) | [`ast_parser.py`](https://github.com/kkipngenokoech/phoenix-agent/blob/main/src/phoenix_agent/tools/ast_parser.py) |
+| **Test Pass Rate** | Percentage of passing tests after changes | [`test_runner.py`](https://github.com/kkipngenokoech/phoenix-agent/blob/main/src/phoenix_agent/tools/test_runner.py) |
+| **Lines of Code** | Total LOC (measures if refactoring reduces bloat) | [`ast_parser.py`](https://github.com/kkipngenokoech/phoenix-agent/blob/main/src/phoenix_agent/tools/ast_parser.py) |
+
+### Sample Project (Test Suite)
+
+The [`sample_project/`](https://github.com/kkipngenokoech/phoenix-agent/tree/main/sample_project) contains intentional code smells across 5+ files with **39 passing tests**. It serves as the evaluation target:
+
+```bash
+cd sample_project && pytest tests/ -v
+# 39 passed
+```
+
+The agent must maintain a 100% test pass rate while improving other metrics.
+
+---
+
+## Project Structure
+
+```
+phoenix-agent/
+├── src/phoenix_agent/
+│   ├── agent.py                    # Main PhoenixAgent entry point
+│   ├── models.py                   # Pydantic models (RefactoringPlan, etc.)
+│   ├── config.py                   # AgentConfig with all settings
+│   ├── provider.py                 # LLM provider factory (Anthropic/OpenAI/Groq/Ollama)
+│   ├── crew/                       # Multi-agent crew system
+│   │   ├── lead_agent.py           # Orchestrator — delegates to sub-agents
+│   │   ├── analyzer_agent.py       # OBSERVE + REASON
+│   │   ├── strategist_agent.py     # PLAN + DECIDE
+│   │   ├── coder_agent.py          # ACT (parallel file modifications)
+│   │   ├── tester_agent.py         # VERIFY
+│   │   ├── base_agent.py           # SubAgent ABC
+│   │   ├── task.py                 # Task/TaskResult dataclasses
+│   │   └── code_gen.py             # Shared code generation utilities
+│   ├── orchestrator/               # Phase implementations
+│   │   ├── observer.py             # AST analysis + metrics
+│   │   ├── reasoner.py             # LLM-based reasoning
+│   │   ├── planner.py              # Refactoring plan generation
+│   │   ├── arbiter.py              # Risk assessment + decision
+│   │   ├── executor.py             # Code generation + file writing
+│   │   ├── verifier.py             # Test execution + metric comparison
+│   │   └── updater.py              # Persistence + finalization
+│   ├── memory/                     # 3-layer state management
+│   │   ├── session.py              # Redis session store
+│   │   ├── history.py              # PostgreSQL history store
+│   │   └── knowledge_graph.py      # Neo4j knowledge graph
+│   ├── tools/                      # Agent tools
+│   │   ├── ast_parser.py           # AST parsing + code smell detection
+│   │   ├── test_runner.py          # pytest execution
+│   │   ├── git_ops.py              # Git operations (commit, diff, revert)
+│   │   └── test_generator.py       # LLM-based test generation
+│   ├── api/                        # FastAPI backend
+│   │   ├── main.py                 # App factory + CORS
+│   │   ├── routes.py               # REST endpoints
+│   │   ├── websocket.py            # WebSocket event streaming
+│   │   ├── agent_registry.py       # Session → agent mapping
+│   │   └── schemas.py              # Request/response schemas
+│   └── cli.py                      # CLI entry point
+├── frontend/                       # Next.js 14 frontend
+│   └── src/
+│       ├── app/
+│       │   ├── page.tsx             # Landing page with RefactorForm
+│       │   ├── session/[id]/page.tsx # Live session view
+│       │   └── history/page.tsx     # Refactoring history
+│       ├── components/
+│       │   ├── PhaseStepper.tsx      # 7-phase progress indicator
+│       │   ├── DiffReview.tsx        # Code diff viewer
+│       │   ├── MetricsCard.tsx       # Before/after metrics
+│       │   ├── TerminalLog.tsx       # Real-time event log
+│       │   └── RefactorForm.tsx      # Project path + request input
+│       ├── hooks/
+│       │   └── useAgentSocket.ts     # WebSocket hook
+│       └── lib/
+│           └── api.ts               # API client
+├── sample_project/                  # Evaluation target (39 tests)
+├── docker-compose.yml               # Dev infrastructure (Redis + PG + Neo4j)
+├── docker-compose.prod.yml          # Production stack
+├── Dockerfile                       # Backend container
+└── frontend/Dockerfile              # Frontend container
+```
+
+---
 
 ## Installation
-
-### Quick Install (PyPI)
-
-```bash
-pip install phoenix-rag
-```
-
-With Groq support (recommended for cloud):
-```bash
-pip install phoenix-rag[groq]
-```
-
-**Note:** After installing, you'll need:
-1. An LLM provider - either Ollama running locally (`ollama serve`) or a `GROQ_API_KEY` environment variable
-2. Knowledge base documents (optional) - the `data/documents/` folder is not included in the pip package. Create your own or clone from the [GitHub repo](https://github.com/kkipngenokoech/phoenix-rag). Code analysis tools work without a knowledge base.
 
 ### Prerequisites
 
 - Python 3.10+
+- Node.js 18+ (for frontend)
+- Docker & Docker Compose (for infrastructure)
 
-### Development Setup
+### 1. Clone and Install
 
-1. Clone the repository:
 ```bash
-git clone https://github.com/kkipngenokoech/phoenix-rag.git
-cd phoenix-rag
-```
+git clone https://github.com/kkipngenokoech/phoenix-agent.git
+cd phoenix-agent
 
-2. Create and activate the conda environment:
-```bash
-conda env create -f environment.yml
-conda activate phoenix-rag
-```
-
-3. Install the package in development mode:
-```bash
+# Python dependencies
 pip install -e .
+
+# Frontend dependencies
+cd frontend && npm install && cd ..
 ```
 
-4. Configure your environment:
+### 2. Start Infrastructure
+
+```bash
+docker-compose up -d  # Redis + PostgreSQL + Neo4j
+```
+
+### 3. Configure Environment
+
 ```bash
 cp .env.example .env
-# Edit .env with your settings
+# Edit .env with your LLM provider credentials
 ```
 
-### LLM Configuration
+### 4. Run Database Migrations
 
-Phoenix supports multiple LLM providers. Set `LLM_PROVIDER` in your `.env` file:
-
-| Provider | Value | Requirements |
-|----------|-------|--------------|
-| Auto (recommended) | `auto` | Tries Ollama first, falls back to Groq |
-| Ollama (local) | `ollama` | Ollama running locally |
-| Groq | `groq` | `GROQ_API_KEY` |
-| Anthropic | `anthropic` | `ANTHROPIC_API_KEY` |
-| OpenAI | `openai` | `OPENAI_API_KEY` |
-
-#### Using Ollama (Local, Free)
-
-1. Install Ollama: https://ollama.ai
-2. Pull a model:
 ```bash
-ollama pull llama3.2
-```
-3. Start Ollama:
-```bash
-ollama serve
+# Apply schema
+docker exec -i phoenix-agent-postgres-1 psql -U phoenix -d phoenix < migrations/001_init.sql
+docker exec -i phoenix-agent-postgres-1 psql -U phoenix -d phoenix < migrations/002_add_file_contents.sql
 ```
 
-#### Using Groq (Cloud, Free Tier)
-
-1. Get an API key from https://console.groq.com
-2. Add to `.env`:
-```
-GROQ_API_KEY=gsk_your_key_here
-```
+---
 
 ## Usage
 
-### Web Interface
+### Web Interface (Recommended)
 
-Run the Streamlit app:
+Start the backend and frontend:
+
 ```bash
-streamlit run app.py
+# Terminal 1: Backend
+PYTHONPATH=src uvicorn phoenix_agent.api.main:app --reload --port 8000
+
+# Terminal 2: Frontend
+cd frontend && npm run dev
 ```
 
-The web interface provides:
-- Chat interface for asking questions about refactoring
-- Code analysis tab for pasting and analyzing code
-- Agent trace viewer showing reasoning steps
-- Quick tools for direct code smell detection and complexity metrics
+Open [http://localhost:3000](http://localhost:3000):
+1. Enter the project path and refactoring request
+2. Watch the 7-phase loop execute in real-time via the phase stepper
+3. Approve or reject the plan at the human-in-the-loop gate
+4. Review diffs and before/after metrics
+5. Browse original vs. refactored files in the GitHub-style file viewer
 
-### CLI Demo
+### CLI
 
-Run the demonstration script:
 ```bash
-python demo.py
+PYTHONPATH=src python -m phoenix_agent refactor sample_project/ "Extract long methods and reduce complexity"
 ```
 
-This demonstrates:
-1. Document ingestion with hybrid chunking
-2. Knowledge retrieval queries
-3. Code analysis with refactoring suggestions
-4. Groundedness verification
-
-### Programmatic Usage
+### Programmatic
 
 ```python
-from phoenix_rag.agent import PhoenixAgent
-from phoenix_rag.config import PhoenixConfig
+from phoenix_agent.agent import PhoenixAgent
+from phoenix_agent.config import AgentConfig
 
-# Initialize
-config = PhoenixConfig()
+config = AgentConfig()
 agent = PhoenixAgent(config)
 
-# Ingest knowledge base
-agent.ingest_knowledge("data/documents")
-
-# Ask a question
-response, trace = agent.run("What is the Extract Method refactoring pattern?")
-print(response)
-
-# Analyze code
-code = '''
-def process_data(a, b, c, d, e, f):
-    # Long method with many parameters
-    result = a + b + c + d + e + f
-    return result
-'''
-response, trace = agent.run("Analyze this code for code smells", code=code)
-print(response)
-```
-
-## Tools
-
-Phoenix provides three built-in tools:
-
-### knowledge_retrieval
-
-Searches the vector database for relevant refactoring knowledge.
-
-Parameters:
-- `query`: Search query string
-- `doc_type`: Filter by document type (refactoring_pattern, code_smell, best_practice, style_guide, all)
-- `num_results`: Number of results to return (1-10)
-
-### code_analyzer
-
-Analyzes Python code for structure and code smells.
-
-Parameters:
-- `code`: Python code to analyze
-- `analysis_type`: Type of analysis (full, smells, structure, complexity)
-
-Detects code smells:
-- Long methods
-- Long parameter lists
-- God classes
-- Deep nesting
-- Complex conditionals
-
-### complexity_calculator
-
-Calculates detailed code complexity metrics.
-
-Parameters:
-- `code`: Python code to analyze
-- `metrics`: List of metrics (cyclomatic, maintainability, halstead, raw, all)
-
-## Knowledge Base
-
-The knowledge base is stored in `data/documents/` with the following structure:
-
-```
-data/documents/
-├── refactoring_patterns/    # Extract Method, Extract Class, etc.
-├── code_smells/             # Long Method, God Class, etc.
-├── best_practices/          # SOLID principles, etc.
-└── style_guides/            # Python style guidelines
-```
-
-### Adding Custom Documents
-
-1. Create a markdown file in the appropriate subdirectory
-2. Run ingestion:
-```python
-agent.retrieval.ingest_from_directory(
-    Path("data/documents/your_folder"),
-    doc_type="your_type"
+result = await agent.run(
+    target_path="sample_project/",
+    request="Refactor the calculate_statistics function to reduce cyclomatic complexity"
 )
 ```
 
+---
+
 ## Deployment
 
-### Streamlit Cloud
+### Production (DigitalOcean + Vercel)
 
-1. Push your code to GitHub
+The live deployment uses:
+- **Backend**: DigitalOcean App Platform — [`Dockerfile`](https://github.com/kkipngenokoech/phoenix-agent/blob/main/Dockerfile) + [`.do/app.yaml`](https://github.com/kkipngenokoech/phoenix-agent/blob/main/.do/app.yaml)
+- **Frontend**: Vercel — [`frontend/Dockerfile`](https://github.com/kkipngenokoech/phoenix-agent/blob/main/frontend/Dockerfile)
+- **Database**: DigitalOcean managed PostgreSQL
 
-2. Go to https://share.streamlit.io and connect your repository
+### Self-Hosted (Docker Compose)
 
-3. Add secrets in the Streamlit Cloud dashboard:
-```toml
-GROQ_API_KEY = "gsk_your_key_here"
+```bash
+docker-compose -f docker-compose.prod.yml up -d
 ```
 
-4. Deploy
+See the [Deployment Guide](https://kipngenokoech.com/projects/phoenix-agent/) for full instructions.
 
-The app automatically detects if Ollama is unavailable and falls back to Groq.
-
-### Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `LLM_PROVIDER` | LLM provider to use | `auto` |
-| `LLM_MODEL` | Model name | `llama3.2` |
-| `GROQ_API_KEY` | Groq API key | - |
-| `ANTHROPIC_API_KEY` | Anthropic API key | - |
-| `OPENAI_API_KEY` | OpenAI API key | - |
-| `OLLAMA_BASE_URL` | Ollama server URL | `http://localhost:11434` |
-| `EMBEDDING_MODEL` | Sentence transformer model | `all-MiniLM-L6-v2` |
-| `CHROMA_PERSIST_DIRECTORY` | ChromaDB storage path | `./data/chroma_db` |
-| `MAX_ITERATIONS` | Max agent reasoning iterations | `10` |
-| `GROUNDEDNESS_THRESHOLD` | Minimum groundedness score | `0.7` |
+---
 
 ## Configuration
 
-### PhoenixConfig
+All settings are managed via [`config.py`](https://github.com/kkipngenokoech/phoenix-agent/blob/main/src/phoenix_agent/config.py) and environment variables:
 
-The main configuration class with nested configs:
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `LLM_PROVIDER` | `anthropic`, `openai`, `groq`, `ollama`, `google` | `anthropic` |
+| `LLM_MODEL` | Model identifier | `claude-sonnet-4-20250514` |
+| `LLM_API_KEY` | API key for the chosen provider | — |
+| `LLM_BASE_URL` | Custom API endpoint (for gateways) | — |
+| `REDIS_URL` | Redis connection string | `redis://localhost:6379/0` |
+| `DATABASE_URL` | PostgreSQL connection string | `postgresql://phoenix:phoenix@localhost:5432/phoenix` |
+| `NEO4J_URI` | Neo4j bolt URI | `bolt://localhost:7687` |
+| `LOG_LEVEL` | Logging verbosity | `INFO` |
+| `SKIP_GIT_OPERATIONS` | Disable git commits (for hosted envs) | `false` |
+| `CORS_ORIGIN` | Allowed frontend origin (production) | — |
 
-- `LLMConfig`: LLM provider settings
-- `EmbeddingConfig`: Embedding model settings
-- `VectorDBConfig`: ChromaDB settings
-- `ChunkingConfig`: Document chunking parameters
-- `AgentConfig`: Agent behavior settings
+---
 
-### Chunking Strategy
+## API Reference
 
-Phoenix uses a hybrid chunking strategy:
+### REST Endpoints
 
-1. **SemanticChunker**: Preserves paragraph and section boundaries for documentation
-2. **CodeAwareChunker**: Keeps code blocks intact, respects function/class boundaries
-3. **HybridChunker**: Automatically detects content type and applies appropriate strategy
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/refactor` | Start a new refactoring session |
+| `GET` | `/api/sessions/{id}` | Get session details (metrics, files, status) |
+| `GET` | `/api/history` | List all past refactoring sessions |
+| `POST` | `/api/sessions/{id}/approve` | Approve the refactoring plan |
+| `POST` | `/api/sessions/{id}/reject` | Reject the plan |
+| `GET` | `/health` | Health check |
 
-## Development
+### WebSocket
 
-### Running Tests
+Connect to `ws://localhost:8000/ws/{session_id}` to receive real-time events:
 
-```bash
-pip install -e ".[dev]"
-pytest
+```json
+{"type": "phase", "data": {"phase": "OBSERVE", "status": "running"}}
+{"type": "observation", "data": {"metrics": {...}, "smells": [...]}}
+{"type": "plan", "data": {"steps": [...]}}
+{"type": "act_step", "data": {"step": 1, "file": "src/utils.py", "status": "done"}}
+{"type": "completed", "data": {"metrics_before": {...}, "metrics_after": {...}}}
 ```
 
-### Code Formatting
+Full API documentation: [REST API](https://kipngenokoech.com/projects/phoenix-agent/) · [WebSocket API](https://kipngenokoech.com/projects/phoenix-agent/)
 
-```bash
-black src/
-ruff check src/
-```
+---
 
-### Type Checking
+## Tools
 
-```bash
-mypy src/
-```
+All tools extend [`BaseTool`](https://github.com/kkipngenokoech/phoenix-agent/blob/main/src/phoenix_agent/tools/base.py) and are managed by the [tool registry](https://github.com/kkipngenokoech/phoenix-agent/blob/main/src/phoenix_agent/tools/registry.py):
+
+| Tool | Source | Purpose |
+|------|--------|---------|
+| **AST Parser** | [`ast_parser.py`](https://github.com/kkipngenokoech/phoenix-agent/blob/main/src/phoenix_agent/tools/ast_parser.py) | Parse Python AST, detect code smells, compute complexity metrics |
+| **Test Runner** | [`test_runner.py`](https://github.com/kkipngenokoech/phoenix-agent/blob/main/src/phoenix_agent/tools/test_runner.py) | Execute pytest, capture results, compute pass rate |
+| **Git Ops** | [`git_ops.py`](https://github.com/kkipngenokoech/phoenix-agent/blob/main/src/phoenix_agent/tools/git_ops.py) | Commit changes, generate diffs, revert on failure |
+| **Test Generator** | [`test_generator.py`](https://github.com/kkipngenokoech/phoenix-agent/blob/main/src/phoenix_agent/tools/test_generator.py) | LLM-powered test case generation |
+
+---
 
 ## License
 
-MIT License
+MIT
 
 ## Acknowledgments
 
-- Built with LangChain, ChromaDB, and Sentence Transformers
-- Refactoring patterns based on Martin Fowler's catalog
-- SOLID principles documentation from Robert C. Martin
-# phoenix-agent
+- Built for CMU 04-801-W3 Agentic AI Engineering
+- LLM integration via [LiteLLM](https://github.com/BerriAI/litellm) (multi-provider support)
+- Frontend built with [Next.js 14](https://nextjs.org/) + [shadcn/ui](https://ui.shadcn.com/)
+- Infrastructure: Redis, PostgreSQL, Neo4j

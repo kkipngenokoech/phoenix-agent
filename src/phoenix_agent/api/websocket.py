@@ -18,6 +18,7 @@ class ConnectionManager:
     def __init__(self) -> None:
         self._connections: dict[str, list[WebSocket]] = {}
         self._queues: dict[str, asyncio.Queue] = {}
+        self._drain_tasks: dict[str, asyncio.Task] = {}
 
     async def connect(self, session_id: str, websocket: WebSocket) -> None:
         await websocket.accept()
@@ -25,6 +26,12 @@ class ConnectionManager:
             self._connections[session_id] = []
         self._connections[session_id].append(websocket)
         logger.info(f"WebSocket connected for session {session_id}")
+
+        # Start a single drain task per session (first connection triggers it)
+        if session_id not in self._drain_tasks or self._drain_tasks[session_id].done():
+            self._drain_tasks[session_id] = asyncio.create_task(
+                self._drain_queue(session_id)
+            )
 
     def disconnect(self, session_id: str, websocket: WebSocket) -> None:
         if session_id in self._connections:
@@ -35,7 +42,33 @@ class ConnectionManager:
                 del self._connections[session_id]
         logger.info(f"WebSocket disconnected for session {session_id}")
 
-    async def send_event(self, session_id: str, event: dict) -> None:
+    async def _drain_queue(self, session_id: str) -> None:
+        """Single loop that drains the event queue and broadcasts to all connections."""
+        queue = self.get_queue(session_id)
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    # Send heartbeat to keep connections alive
+                    await self._broadcast(session_id, {"type": "heartbeat"})
+                    continue
+
+                if event is None:
+                    # Agent finished — stop draining (the agent already
+                    # emitted a "completed" event with the result data)
+                    break
+
+                await self._broadcast(session_id, event)
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"Drain loop error for {session_id}: {e}")
+        finally:
+            self._drain_tasks.pop(session_id, None)
+            self._queues.pop(session_id, None)
+
+    async def _broadcast(self, session_id: str, event: dict) -> None:
         """Send event to all connections for a session."""
         connections = self._connections.get(session_id, [])
         dead: list[WebSocket] = []
@@ -46,8 +79,10 @@ class ConnectionManager:
                 dead.append(ws)
         for ws in dead:
             self.disconnect(session_id, ws)
-        if dead and not self._connections.get(session_id):
-            logger.info(f"All WebSocket clients disconnected for session {session_id}")
+
+    async def send_event(self, session_id: str, event: dict) -> None:
+        """Send event to all connections for a session (legacy alias)."""
+        await self._broadcast(session_id, event)
 
     def get_queue(self, session_id: str) -> asyncio.Queue:
         """Get or create an event queue for a session."""

@@ -7,7 +7,8 @@ install:
 
 # Start both backend and frontend (dev mode)
 dev:
-	@echo "Starting backend on :8000 and frontend on :3000..."
+	@echo "Starting infrastructure, backend on :8000, frontend on :3000..."
+	@docker-compose up -d 2>/dev/null || echo "Warning: Docker not available — running without Redis/Postgres/Neo4j"
 	@make backend & make frontend
 
 # Backend API server

@@ -343,19 +343,24 @@ class PhoenixAgent:
             logger.info("Review approved — applying staged changes")
 
             # Copy changed files from staging dir back to the original project
+            # (only for local_path — pasted code has no real original directory)
             resolved = get_resolved(session.session_id)
             if resolved and resolved.is_temporary and resolved.original_source:
-                changed_files = [
-                    r["target_file"]
-                    for r in step_results
-                    if r.get("action") == "modify_code" and r.get("success")
-                ]
-                applied = apply_staged_changes(resolved, changed_files)
-                logger.info(f"Applied {len(applied)} files to {resolved.original_source}")
+                from phoenix_agent.input_resolver import InputType
+                if resolved.input_type == InputType.LOCAL_PATH:
+                    changed_files = [
+                        r["target_file"]
+                        for r in step_results
+                        if r.get("action") == "modify_code" and r.get("success")
+                    ]
+                    applied = apply_staged_changes(resolved, changed_files)
+                    logger.info(f"Applied {len(applied)} files to {resolved.original_source}")
+                else:
+                    logger.info(f"Pasted code — skipping apply (files returned via API)")
 
             session.status = SessionStatus.ACTIVE
             logger.info("Calling finalize_success...")
-            result = self.updater.finalize_success(session, report, start_time)
+            result = self.updater.finalize_success(session, report, start_time, step_results)
             logger.info("finalize_success complete — returning result")
             return result
 

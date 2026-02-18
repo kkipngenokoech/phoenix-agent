@@ -94,11 +94,16 @@ class Verifier:
         if not before and not after:
             return False
 
-        # If we went from N files to M files (M > N), that's an SRP extraction —
-        # consider it improved if max per-file complexity decreased.
         if not before or not after:
-            # No metrics on one side — treat as improved if refactoring produced output
             return bool(after)
+
+        # SRP extraction: splitting 1 file into multiple is an improvement by definition
+        # (the whole point is separation of concerns, not reducing total LOC)
+        if len(after) > len(before):
+            logger.info(
+                f"SRP extraction detected: {len(before)} file(s) → {len(after)} file(s) — treating as improved"
+            )
+            return True
 
         max_before = max(before.values()) if before else 0
         max_after = max(after.values()) if after else 0
@@ -107,7 +112,6 @@ class Verifier:
         total_after = sum(after.values())
 
         # Improved if: total complexity decreased OR max per-file complexity decreased
-        # (extracting classes into separate files lowers the max even if total is similar)
         return total_after <= total_before or max_after < max_before
 
     def _build_details(

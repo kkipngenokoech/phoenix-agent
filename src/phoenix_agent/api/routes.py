@@ -216,13 +216,40 @@ async def get_session(session_id: str) -> dict:
         if _history:
             record = _history.get_by_session(session_id)
             if record:
-                return record.model_dump(mode="json")
+                data = record.model_dump(mode="json")
+                # Wrap in same structure frontend expects
+                return {
+                    "session": {
+                        "session_id": record.session_id,
+                        "status": record.outcome,
+                        "duration_seconds": record.duration_seconds,
+                    },
+                    "iterations": [],
+                    "original_files": record.original_files or {},
+                    "refactored_files": record.refactored_files or {},
+                    "metrics_before": record.metrics_before or {},
+                    "metrics_after": record.metrics_after or {},
+                }
         return {"error": "Session not found"}
 
     iterations = _session_memory.get_all_iterations(session_id)
+
+    # Include file contents from history if available
+    files_data = {}
+    if _history:
+        record = _history.get_by_session(session_id)
+        if record:
+            files_data = {
+                "original_files": record.original_files or {},
+                "refactored_files": record.refactored_files or {},
+                "metrics_before": record.metrics_before or {},
+                "metrics_after": record.metrics_after or {},
+            }
+
     return {
         "session": session.model_dump(mode="json"),
         "iterations": [it.model_dump(mode="json") for it in iterations],
+        **files_data,
     }
 
 
@@ -273,34 +300,23 @@ async def submit_review(session_id: str, body: dict) -> dict:
 
 @ws_router.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
-    """Stream real-time phase events to the client."""
+    """Stream real-time phase events to the client.
+
+    The ConnectionManager handles draining the event queue and broadcasting
+    to all connected clients. This handler just keeps the connection alive
+    and cleans up on disconnect.
+    """
     await manager.connect(session_id, websocket)
-    queue = manager.get_queue(session_id)
-
     try:
+        # Keep connection open — just wait for client messages or disconnect
         while True:
-            # Wait up to 15s for an event; send heartbeat if idle
             try:
-                event = await asyncio.wait_for(queue.get(), timeout=15.0)
-            except asyncio.TimeoutError:
-                # Keep connection alive during long phases (e.g. ACT w/ Ollama)
-                try:
-                    await websocket.send_json({"type": "heartbeat"})
-                except (WebSocketDisconnect, RuntimeError):
-                    break
-                continue
-
-            if event is None:
-                # Agent finished — send a final close signal
+                await websocket.receive_text()
+            except WebSocketDisconnect:
                 break
-            await manager.send_event(session_id, event)
-    except WebSocketDisconnect:
-        logger.info(f"Client disconnected from session {session_id}")
-    except RuntimeError as e:
-        # "Cannot call 'send' once a close message has been sent"
-        logger.info(f"WebSocket already closed for {session_id}: {e}")
+    except RuntimeError:
+        pass
     except Exception as e:
         logger.error(f"WebSocket error for {session_id}: {e}")
     finally:
         manager.disconnect(session_id, websocket)
-        manager.remove_queue(session_id)

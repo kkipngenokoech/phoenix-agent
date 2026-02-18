@@ -41,14 +41,17 @@ class RefactoringHistory:
                     """
                     INSERT INTO refactoring_history
                         (session_id, timestamp, files_modified, risk_score,
-                         metrics_before, metrics_after, pr_url, outcome, duration_seconds)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                         metrics_before, metrics_after, pr_url, outcome,
+                         duration_seconds, original_files, refactored_files)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (session_id) DO UPDATE SET
                         files_modified = EXCLUDED.files_modified,
                         metrics_after = EXCLUDED.metrics_after,
                         pr_url = EXCLUDED.pr_url,
                         outcome = EXCLUDED.outcome,
-                        duration_seconds = EXCLUDED.duration_seconds
+                        duration_seconds = EXCLUDED.duration_seconds,
+                        original_files = EXCLUDED.original_files,
+                        refactored_files = EXCLUDED.refactored_files
                     """,
                     (
                         record.session_id,
@@ -60,6 +63,8 @@ class RefactoringHistory:
                         record.pr_url,
                         record.outcome,
                         record.duration_seconds,
+                        json.dumps(record.original_files),
+                        json.dumps(record.refactored_files),
                     ),
                 )
             logger.info(f"Recorded refactoring {record.session_id}")
@@ -157,16 +162,25 @@ class RefactoringHistory:
 
     @staticmethod
     def _row_to_record(row: dict) -> RefactoringRecord:
+        def _parse_json(val, default):
+            if val is None:
+                return default
+            if isinstance(val, (dict, list)):
+                return val
+            return json.loads(val)
+
         return RefactoringRecord(
             session_id=row["session_id"],
             timestamp=row["timestamp"],
-            files_modified=row["files_modified"] if isinstance(row["files_modified"], list) else json.loads(row["files_modified"]),
+            files_modified=_parse_json(row["files_modified"], []),
             risk_score=row["risk_score"],
-            metrics_before=row["metrics_before"] if isinstance(row["metrics_before"], dict) else json.loads(row["metrics_before"]),
-            metrics_after=row["metrics_after"] if isinstance(row["metrics_after"], dict) else json.loads(row["metrics_after"]),
+            metrics_before=_parse_json(row["metrics_before"], {}),
+            metrics_after=_parse_json(row["metrics_after"], {}),
             pr_url=row.get("pr_url"),
             outcome=row["outcome"],
             duration_seconds=row["duration_seconds"],
+            original_files=_parse_json(row.get("original_files"), {}),
+            refactored_files=_parse_json(row.get("refactored_files"), {}),
         )
 
     def close(self) -> None:

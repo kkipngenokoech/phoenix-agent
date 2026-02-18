@@ -296,6 +296,8 @@ class RefactoringRecord(BaseModel):
     pr_url: Optional[str] = None
     outcome: str = "success"  # success | failed | timeout | rejected
     duration_seconds: float = 0.0
+    original_files: dict[str, str] = Field(default_factory=dict)
+    refactored_files: dict[str, str] = Field(default_factory=dict)
 
 
 class TeamPreference(BaseModel):

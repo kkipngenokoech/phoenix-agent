@@ -12,7 +12,9 @@ CREATE TABLE IF NOT EXISTS refactoring_history (
     outcome VARCHAR(32) DEFAULT 'success',
     duration_seconds FLOAT DEFAULT 0.0,
     goal_description TEXT,
-    target_path TEXT
+    target_path TEXT,
+    original_files JSONB DEFAULT '{}'::jsonb,
+    refactored_files JSONB DEFAULT '{}'::jsonb
 );
 
 CREATE TABLE IF NOT EXISTS team_preferences (

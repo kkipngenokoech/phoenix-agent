@@ -82,6 +82,7 @@ class Updater:
         session: SessionState,
         report: VerificationReport,
         start_time: float,
+        step_results: list[dict] | None = None,
     ) -> dict:
         """On success: create branch, commit, PR, write to long-term memory."""
         logger.info("UPDATE: finalizing successful refactoring")
@@ -144,6 +145,27 @@ class Updater:
 
         # 4. Write to long-term memory (PostgreSQL)
         duration = time.time() - start_time
+
+        # Read refactored files so the frontend can display them
+        refactored_files = self._read_refactored_files(
+            repo_path, list(report.complexity_after.keys())
+        )
+
+        # Extract original file contents from step_results metadata
+        original_files: dict[str, str] = {}
+        if step_results:
+            for r in step_results:
+                if r.get("action") == "modify_code" and r.get("success"):
+                    orig = (r.get("metadata") or {}).get("original_content", "")
+                    if orig:
+                        file_path = r["target_file"]
+                        try:
+                            from pathlib import Path
+                            rel = str(Path(file_path).relative_to(repo_path))
+                        except (ValueError, TypeError):
+                            rel = file_path.split("/")[-1] if "/" in file_path else file_path
+                        original_files[rel] = orig
+
         try:
             record = RefactoringRecord(
                 session_id=session.session_id,
@@ -154,6 +176,8 @@ class Updater:
                 pr_url=session.pr_url,
                 outcome="success",
                 duration_seconds=duration,
+                original_files=original_files,
+                refactored_files=refactored_files,
             )
             self._history.record_refactoring(record)
             logger.info("UPDATE: history record written")
@@ -178,12 +202,6 @@ class Updater:
 
         logger.info(f"UPDATE: refactoring complete. PR: {session.pr_url}")
 
-        # Read refactored files so the frontend can display them
-        # (especially important for pasted code where files live in a temp dir)
-        refactored_files = self._read_refactored_files(
-            repo_path, list(report.complexity_after.keys())
-        )
-
         return {
             "status": "success",
             "session_id": session.session_id,
@@ -192,6 +210,7 @@ class Updater:
             "duration_seconds": duration,
             "metrics_before": report.complexity_before,
             "metrics_after": report.complexity_after,
+            "original_files": original_files,
             "refactored_files": refactored_files,
         }
 

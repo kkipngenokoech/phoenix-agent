@@ -151,7 +151,7 @@ def _resolve_local_path(target_path: Optional[str]) -> ResolvedInput:
 
     # Stage a copy so the original directory is never modified directly.
     # On approval, changed files get copied back to the original.
-    temp_dir = tempfile.mkdtemp(prefix="phoenix_stage_")
+    temp_dir = os.path.realpath(tempfile.mkdtemp(prefix="phoenix_stage_"))
     staged_path = os.path.join(temp_dir, resolved.name)
 
     shutil.copytree(
@@ -202,7 +202,7 @@ def _resolve_pasted_code(
             "Either pasted_code or pasted_files is required for pasted_code input type"
         )
 
-    temp_dir = tempfile.mkdtemp(prefix="phoenix_paste_")
+    temp_dir = os.path.realpath(tempfile.mkdtemp(prefix="phoenix_paste_"))
     project_dir = os.path.join(temp_dir, "project")
     os.makedirs(project_dir)
 
@@ -274,7 +274,7 @@ def _resolve_github_url(github_url: Optional[str]) -> ResolvedInput:
     ref = match.group("ref") or "HEAD"
     sub_path = match.group("path")
 
-    temp_dir = tempfile.mkdtemp(prefix="phoenix_gh_")
+    temp_dir = os.path.realpath(tempfile.mkdtemp(prefix="phoenix_gh_"))
     clone_dir = os.path.join(temp_dir, repo)
 
     clone_url = f"https://github.com/{owner}/{repo}.git"

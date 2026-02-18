@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { useAgentSocket } from "@/hooks/useAgentSocket";
-import { ReviewPayload, getReview, submitReview } from "@/lib/api";
+import { ReviewPayload, SessionDetail, getReview, getSession, submitReview } from "@/lib/api";
 import DiffReview from "@/components/DiffReview";
 import MetricsCard from "@/components/MetricsCard";
 import PhaseStepper from "@/components/PhaseStepper";
@@ -23,16 +23,46 @@ export default function SessionPage() {
 
   const [fetchedReview, setFetchedReview] = useState<ReviewPayload | null>(null);
   const [reviewComplete, setReviewComplete] = useState(false);
+  const [historicalResult, setHistoricalResult] = useState<Record<string, unknown> | null>(null);
+
+  // Stable ref to track whether we've seen a review event (avoids allEvents in deps)
+  const hasSeenReviewRef = useRef(false);
+  if (allEvents.some((e) => e.type === "review_requested")) {
+    hasSeenReviewRef.current = true;
+  }
 
   useEffect(() => {
     if (reviewPayload || fetchedReview || !sessionId) return;
-    const hasReviewEvent = allEvents.some((e) => e.type === "review_requested");
-    if (!hasReviewEvent) return;
+    if (!hasSeenReviewRef.current) return;
 
     getReview(sessionId)
       .then(setFetchedReview)
       .catch(() => {});
-  }, [allEvents, reviewPayload, fetchedReview, sessionId]);
+  }, [reviewPayload, fetchedReview, sessionId]);
+
+  // Fetch session data from API immediately on mount.
+  // If the session is already complete (viewing from history), show it right away.
+  // If a live WebSocket result arrives later, it takes priority.
+  useEffect(() => {
+    if (!sessionId) return;
+    getSession(sessionId)
+      .then((data: SessionDetail) => {
+        if (data.error) return;
+        const sess = data.session;
+        if (sess && (sess.status === "completed" || sess.status === "success" || sess.status === "failed")) {
+          setHistoricalResult({
+            status: sess.status === "completed" ? "success" : sess.status,
+            session_id: sess.session_id,
+            duration_seconds: sess.duration_seconds,
+            original_files: data.original_files || {},
+            refactored_files: data.refactored_files || {},
+            metrics_before: data.metrics_before || {},
+            metrics_after: data.metrics_after || {},
+          });
+        }
+      })
+      .catch(() => {});
+  }, [sessionId]);
 
   const activeReview = reviewPayload || fetchedReview;
   const currentPhase = iterations[iterations.length - 1]?.currentPhase;
@@ -61,7 +91,7 @@ export default function SessionPage() {
         {/* Main Content */}
         <div className="max-w-4xl mx-auto space-y-6">
           {/* Running state */}
-          {!result && !activeReview && !approvalData && (
+          {!result && !historicalResult && !activeReview && !approvalData && (
             actStep ? (
               <ActProgressCard step={actStep} />
             ) : (
@@ -103,7 +133,7 @@ export default function SessionPage() {
           )}
 
           {/* Result */}
-          {result && <ResultCard result={result} />}
+          {(result || historicalResult) && <ResultCard result={(result || historicalResult)!} />}
         </div>
 
         {/* Terminal Log */}
@@ -146,60 +176,307 @@ function StatusBadge({ status }: { status: string }) {
 function ResultCard({ result }: { result: Record<string, unknown> }) {
   const status = result.status as string;
   const isSuccess = status === "success";
+  const refactoredFiles = (result.refactored_files || {}) as Record<string, string>;
+  const originalFiles = (result.original_files || {}) as Record<string, string>;
+  const metricsBefore = (result.metrics_before || {}) as Record<string, number>;
+  const metricsAfter = (result.metrics_after || {}) as Record<string, number>;
+  const fileEntries = Object.entries(refactoredFiles);
+  const [activeFile, setActiveFile] = useState(fileEntries[0]?.[0] || "");
+  const [viewMode, setViewMode] = useState<"refactored" | "original">("refactored");
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = (content: string) => {
+    navigator.clipboard.writeText(content);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  // Build metrics table data
+  const allMetricFiles = Array.from(
+    new Set([...Object.keys(metricsBefore), ...Object.keys(metricsAfter)])
+  ).sort();
+  const totalBefore = Object.values(metricsBefore).reduce((a, b) => a + b, 0);
+  const totalAfter = Object.values(metricsAfter).reduce((a, b) => a + b, 0);
+  const hasMetrics = allMetricFiles.length > 0;
 
   return (
-    <Card
-      className={
-        isSuccess
-          ? "border-phoenix/30 shadow-[0_0_20px_hsl(var(--phoenix)/0.08)]"
-          : "border-red-500/30 shadow-[0_0_20px_rgba(239,68,68,0.08)]"
-      }
-    >
-      <CardHeader>
-        <CardTitle className="flex items-center gap-3">
-          {isSuccess ? (
-            <CheckCircle2 className="h-6 w-6 text-phoenix" />
-          ) : (
-            <XCircle className="h-6 w-6 text-red-400" />
-          )}
-          <span className={isSuccess ? "text-phoenix" : "text-red-400"}>
-            {isSuccess ? "Refactoring Complete" : "Refactoring Failed"}
-          </span>
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        {result.reason ? (
-          <p className="text-sm text-muted-foreground mb-6">
-            {String(result.reason)}
-          </p>
-        ) : null}
+    <div className="space-y-6">
+      <Card
+        className={
+          isSuccess
+            ? "border-phoenix/30 shadow-[0_0_20px_hsl(var(--phoenix)/0.08)]"
+            : "border-red-500/30 shadow-[0_0_20px_rgba(239,68,68,0.08)]"
+        }
+      >
+        <CardHeader>
+          <CardTitle className="flex items-center gap-3">
+            {isSuccess ? (
+              <CheckCircle2 className="h-6 w-6 text-phoenix" />
+            ) : (
+              <XCircle className="h-6 w-6 text-red-400" />
+            )}
+            <span className={isSuccess ? "text-phoenix" : "text-red-400"}>
+              {isSuccess ? "Refactoring Complete" : "Refactoring Failed"}
+            </span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {result.reason ? (
+            <p className="text-sm text-muted-foreground mb-6">
+              {String(result.reason)}
+            </p>
+          ) : null}
 
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          {result.duration_seconds !== undefined ? (
-            <MetricsCard
-              label="Duration"
-              value={`${(result.duration_seconds as number).toFixed(1)}s`}
-            />
-          ) : null}
-          {result.branch ? (
-            <MetricsCard label="Branch" value={String(result.branch)} />
-          ) : null}
-          {result.pr_url ? (
-            <div className="col-span-2 flex items-center">
-              <a
-                href={String(result.pr_url)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 text-sm font-semibold text-phoenix hover:text-phoenix/80 transition-colors"
-              >
-                <ExternalLink className="h-4 w-4" />
-                View Pull Request
-              </a>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            {result.duration_seconds !== undefined ? (
+              <MetricsCard
+                label="Duration"
+                value={`${(result.duration_seconds as number).toFixed(1)}s`}
+              />
+            ) : null}
+            {result.branch ? (
+              <MetricsCard label="Branch" value={String(result.branch)} />
+            ) : null}
+            {hasMetrics && (
+              <>
+                <MetricsCard label="Before" value={String(totalBefore)} />
+                <MetricsCard label="After" value={String(totalAfter)} />
+              </>
+            )}
+            {result.pr_url ? (
+              <div className="col-span-2 flex items-center">
+                <a
+                  href={String(result.pr_url)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 text-sm font-semibold text-phoenix hover:text-phoenix/80 transition-colors"
+                >
+                  <ExternalLink className="h-4 w-4" />
+                  View Pull Request
+                </a>
+              </div>
+            ) : null}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Complexity metrics table */}
+      {isSuccess && hasMetrics && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Search className="h-5 w-5 text-phoenix" />
+              Complexity Metrics
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-auto rounded-md border border-border">
+              <table className="w-full text-xs font-mono">
+                <thead>
+                  <tr className="border-b border-border bg-muted/50">
+                    <th className="text-left px-3 py-2 text-muted-foreground font-medium">File</th>
+                    <th className="text-right px-3 py-2 text-muted-foreground font-medium">Before</th>
+                    <th className="text-right px-3 py-2 text-muted-foreground font-medium">After</th>
+                    <th className="text-right px-3 py-2 text-muted-foreground font-medium">Change</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {allMetricFiles.map((file) => {
+                    const b = metricsBefore[file] ?? 0;
+                    const a = metricsAfter[file] ?? 0;
+                    const delta = a - b;
+                    const shortName = file.split("/").pop() || file;
+                    const isNew = !(file in metricsBefore);
+                    return (
+                      <tr key={file} className="border-b border-border/50 last:border-0">
+                        <td className="px-3 py-2 text-foreground">
+                          {shortName}
+                          {isNew && (
+                            <span className="ml-2 text-[10px] text-phoenix/70 bg-phoenix/10 px-1.5 py-0.5 rounded">
+                              new
+                            </span>
+                          )}
+                        </td>
+                        <td className="text-right px-3 py-2 text-muted-foreground">
+                          {file in metricsBefore ? b : "—"}
+                        </td>
+                        <td className="text-right px-3 py-2 text-muted-foreground">
+                          {file in metricsAfter ? a : "—"}
+                        </td>
+                        <td
+                          className={`text-right px-3 py-2 font-medium ${
+                            delta < 0
+                              ? "text-green-400"
+                              : delta > 0
+                              ? "text-red-400"
+                              : "text-muted-foreground"
+                          }`}
+                        >
+                          {isNew ? "new" : `${delta > 0 ? "+" : ""}${delta}`}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {/* Total row */}
+                  <tr className="bg-muted/30 font-semibold">
+                    <td className="px-3 py-2 text-foreground">Total</td>
+                    <td className="text-right px-3 py-2 text-muted-foreground">{totalBefore}</td>
+                    <td className="text-right px-3 py-2 text-muted-foreground">{totalAfter}</td>
+                    <td
+                      className={`text-right px-3 py-2 ${
+                        totalAfter < totalBefore
+                          ? "text-green-400"
+                          : totalAfter > totalBefore
+                          ? "text-red-400"
+                          : "text-muted-foreground"
+                      }`}
+                    >
+                      {totalAfter - totalBefore > 0 ? "+" : ""}
+                      {totalAfter - totalBefore}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
-          ) : null}
-        </div>
-      </CardContent>
-    </Card>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* GitHub-style file browser */}
+      {isSuccess && fileEntries.length > 0 && (
+        <Card className="overflow-hidden">
+          <CardHeader className="pb-0">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base flex items-center gap-2">
+                <FileCode2 className="h-5 w-5 text-phoenix" />
+                Files
+                <span className="text-xs text-muted-foreground font-normal ml-1">
+                  {fileEntries.length} file{fileEntries.length !== 1 ? "s" : ""}
+                </span>
+              </CardTitle>
+              {Object.keys(originalFiles).length > 0 && (
+                <div className="flex rounded-md border border-border overflow-hidden text-xs">
+                  <button
+                    onClick={() => setViewMode("original")}
+                    className={`px-3 py-1 transition-colors ${
+                      viewMode === "original"
+                        ? "bg-muted text-foreground font-medium"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    Original
+                  </button>
+                  <button
+                    onClick={() => setViewMode("refactored")}
+                    className={`px-3 py-1 transition-colors border-l border-border ${
+                      viewMode === "refactored"
+                        ? "bg-phoenix/15 text-phoenix font-medium"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    Refactored
+                  </button>
+                </div>
+              )}
+            </div>
+          </CardHeader>
+          <CardContent className="pt-4 px-0">
+            <div className="flex min-h-[400px] border-t border-border">
+              {/* File sidebar */}
+              <div className="w-56 shrink-0 border-r border-border bg-muted/30 overflow-y-auto">
+                {fileEntries.map(([name]) => {
+                  const isNew = !(name in metricsBefore) && name !== "main.py";
+                  return (
+                    <button
+                      key={name}
+                      onClick={() => setActiveFile(name)}
+                      className={`w-full text-left px-3 py-2 text-xs font-mono flex items-center gap-2 transition-colors border-l-2 ${
+                        activeFile === name
+                          ? "bg-phoenix/10 text-phoenix border-l-phoenix"
+                          : "text-muted-foreground hover:text-foreground hover:bg-muted/50 border-l-transparent"
+                      }`}
+                    >
+                      <FileCode2 className="h-3.5 w-3.5 shrink-0 opacity-60" />
+                      <span className="truncate">{name}</span>
+                      {isNew && (
+                        <span className="ml-auto text-[9px] text-phoenix/70 bg-phoenix/10 px-1 py-0.5 rounded shrink-0">
+                          new
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Code viewer */}
+              <div className="flex-1 min-w-0">
+                {activeFile ? (() => {
+                  const activeContent = viewMode === "original"
+                    ? (originalFiles[activeFile] || "")
+                    : (refactoredFiles[activeFile] || "");
+                  if (!activeContent) {
+                    return (
+                      <div className="flex items-center justify-center h-full text-sm text-muted-foreground">
+                        {viewMode === "original" ? "No original version available" : "Select a file to view"}
+                      </div>
+                    );
+                  }
+                  const lines = activeContent.split("\n");
+                  return (
+                    <div className="relative h-full flex flex-col">
+                      {/* File header bar */}
+                      <div className="flex items-center justify-between px-4 py-2 bg-muted/40 border-b border-border">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-mono text-foreground">{activeFile}</span>
+                          {viewMode === "original" && (
+                            <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+                              original
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] text-muted-foreground">
+                            {lines.length} lines
+                          </span>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-6 text-[10px] px-2"
+                            onClick={() => handleCopy(activeContent)}
+                          >
+                            {copied ? "Copied!" : "Copy"}
+                          </Button>
+                        </div>
+                      </div>
+                      {/* Code block */}
+                      <pre className="overflow-auto flex-1 p-0 text-xs font-mono leading-relaxed">
+                        {lines.map((line: string, i: number) => (
+                          <div
+                            key={i}
+                            className="flex hover:bg-muted/30 transition-colors"
+                          >
+                            <span className="text-muted-foreground/40 select-none w-10 shrink-0 text-right pr-3 py-px border-r border-border/30 bg-muted/20">
+                              {i + 1}
+                            </span>
+                            <span className="text-foreground pl-4 py-px whitespace-pre">
+                              {line || " "}
+                            </span>
+                          </div>
+                        ))}
+                      </pre>
+                    </div>
+                  );
+                })() : (
+                  <div className="flex items-center justify-center h-full text-sm text-muted-foreground">
+                    Select a file to view
+                  </div>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+    </div>
   );
 }
 
